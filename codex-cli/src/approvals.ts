@@ -95,6 +95,22 @@ export function canAutoApprove(
     };
   }
 
+  // -----------------------------------------------------------------------
+  // Special‑case certain Git commands that are known to require network
+  // access.  Running these inside the sandbox is pointless because outbound
+  // traffic is blocked, which leads to confusing "can't reach remote Git
+  // server" errors. Instead, always fall back to asking the user so the
+  // command can be executed *outside* the sandbox once approved.
+  // -----------------------------------------------------------------------
+
+  if (
+    command[0] === "git" &&
+    typeof command[1] === "string" &&
+    ["push", "pull", "fetch", "clone", "remote"].includes(command[1])
+  ) {
+    return { type: "ask-user" };
+  }
+
   if (
     command[0] === "bash" &&
     command[1] === "-lc" &&
@@ -385,6 +401,15 @@ export function isSafeCommand(
           return {
             reason: "Git show",
             group: "Using git",
+          };
+        case "commit":
+          // `git commit` is a purely local operation. It does not contact the
+          // network and its side‑effects are limited to writing new objects
+          // inside the repository. Treat it as safe so that Codex can
+          // auto‑approve it even in full‑auto mode.
+          return {
+            reason: "Git commit",
+            group: "Versioning",
           };
         default:
           return null;

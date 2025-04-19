@@ -327,6 +327,13 @@ export const loadConfig = (
   if (storedConfig.fullAutoErrorMode) {
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
+  // If the user has not explicitly opted into a behaviour, default to
+  // prompting ("ask‑user") so that sandbox failures can be retried outside
+  // the sandbox. This guards against confusing silent failures when running
+  // network‑dependent commands such as `git push` in full‑auto mode.
+  if (!config.fullAutoErrorMode) {
+    config.fullAutoErrorMode = "ask-user" as FullAutoErrorMode;
+  }
   // Notification setting: enable desktop notifications when set in config
   config.notify = storedConfig.notify === true;
 
