@@ -496,8 +496,17 @@ export class AgentLoop {
             if (this.model.startsWith("o")) {
               reasoning = { effort: "high" };
               if (this.model === "o3" || this.model === "o4-mini") {
-                // @ts-expect-error waiting for API type update
-                reasoning.summary = "auto";
+                // The openai library doesn't yet include the `summary` field
+                // in its Reasoning type, but according to the public API it
+                // is already supported.  Cast to `any` to avoid a spurious
+                // "unused @ts‑expect‑error" diagnostic while we wait for the
+                // upstream types to be updated.
+                // The upstream `openai` typings do not yet include the
+                // optional `summary` field on the Reasoning object.  Cast via
+                // `unknown` first and then to an indexed type to avoid the
+                // `no‑explicit‑any` ESLint violation while still sidestepping
+                // the missing property on the official type.
+                (reasoning as unknown as Record<string, unknown>)["summary"] = "auto";
               }
             }
             const mergedInstructions = [prefix, this.instructions]

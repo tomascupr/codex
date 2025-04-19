@@ -403,14 +403,11 @@ export function isSafeCommand(
             group: "Using git",
           };
         case "commit":
-          // `git commit` is a purely local operation. It does not contact the
-          // network and its side‑effects are limited to writing new objects
-          // inside the repository. Treat it as safe so that Codex can
-          // auto‑approve it even in full‑auto mode.
-          return {
-            reason: "Git commit",
-            group: "Versioning",
-          };
+          // Creating commits alters the repository history and is a potentially
+          // destructive operation from the perspective of an interactive
+          // coding assistant.  To stay on the safe side we defer to the user
+          // for confirmation instead of auto‑approving it.
+          return null;
         default:
           return null;
       }

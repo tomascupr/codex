@@ -1,6 +1,9 @@
 {
   "description": "Tools for repo-wide maintenance.",
   "scripts": {
+    "test": "npm --prefix codex-cli test",
+    "lint": "npm --prefix codex-cli run lint",
+    "typecheck": "npm --prefix codex-cli run typecheck",
     "release": "cd codex-cli && npm run release",
     "format": "prettier --check *.json *.md .github/workflows/*.yml",
     "format:fix": "prettier --write *.json *.md .github/workflows/*.yml",
