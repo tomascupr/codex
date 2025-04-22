@@ -229,7 +229,12 @@ if (cli.flags.config) {
     // ignore errors
   }
 
-  const filePath = INSTRUCTIONS_FILEPATH;
+  // Open project instructions if present, else global
+  const cwd = process.cwd();
+  const projectInstructionsPath = path.join(cwd, ".codex", "instructions.md");
+  const filePath = fs.existsSync(projectInstructionsPath)
+    ? projectInstructionsPath
+    : INSTRUCTIONS_FILEPATH;
   const editor =
     process.env["EDITOR"] || (process.platform === "win32" ? "notepad" : "vi");
   spawnSync(editor, [filePath], { stdio: "inherit" });

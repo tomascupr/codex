@@ -242,6 +242,8 @@ export const loadConfig = (
   instructionsPath: string | undefined = INSTRUCTIONS_FILEPATH,
   options: LoadConfigOptions = {},
 ): AppConfig => {
+  // Determine working directory for project‑level overrides
+  const cwd = options.cwd ?? process.cwd();
   // Determine the actual path to load. If the provided path doesn't exist and
   // the caller passed the default JSON path, automatically fall back to YAML
   // variants.
@@ -271,9 +273,38 @@ export const loadConfig = (
       storedConfig = {};
     }
   }
+  // Overlay project‑level config overrides from ./.codex if present
+  const projectConfigDir = join(cwd, ".codex");
+  const projectConfigPaths = [
+    join(projectConfigDir, "config.json"),
+    join(projectConfigDir, "config.yaml"),
+    join(projectConfigDir, "config.yml"),
+  ];
+  for (const p of projectConfigPaths) {
+    if (existsSync(p)) {
+      try {
+        const raw = readFileSync(p, "utf-8");
+        const ext = extname(p).toLowerCase();
+        const projectStored =
+          ext === ".yaml" || ext === ".yml"
+            ? (loadYaml(raw) as unknown as StoredConfig)
+            : JSON.parse(raw);
+        // Merge project overrides; shallow merge is sufficient
+        storedConfig = { ...storedConfig, ...projectStored };
+      } catch {
+        // ignore parsing errors in project config
+      }
+      break;
+    }
+  }
 
-  const instructionsFilePathResolved =
-    instructionsPath ?? INSTRUCTIONS_FILEPATH;
+  // Resolve instructions: prefer project/.codex/instructions.md over global
+  const projectInstructionsPath = join(cwd, ".codex", "instructions.md");
+  const instructionsFilePathResolved = instructionsPath
+    ? instructionsPath
+    : existsSync(projectInstructionsPath)
+    ? projectInstructionsPath
+    : INSTRUCTIONS_FILEPATH;
   const userInstructions = existsSync(instructionsFilePathResolved)
     ? readFileSync(instructionsFilePathResolved, "utf-8")
     : DEFAULT_INSTRUCTIONS;
@@ -357,13 +388,13 @@ export const loadConfig = (
       }
     }
 
-    // Always ensure the instructions file exists so users can edit it.
-    if (!existsSync(instructionsFilePathResolved)) {
-      const instrDir = dirname(instructionsFilePathResolved);
+    // Always ensure the global instructions file exists so users can edit it.
+    if (!existsSync(INSTRUCTIONS_FILEPATH)) {
+      const instrDir = dirname(INSTRUCTIONS_FILEPATH);
       if (!existsSync(instrDir)) {
         mkdirSync(instrDir, { recursive: true });
       }
-      writeFileSync(instructionsFilePathResolved, userInstructions, "utf-8");
+      writeFileSync(INSTRUCTIONS_FILEPATH, userInstructions, "utf-8");
     }
   } catch {
     // Silently ignore any errors – failure to persist the defaults shouldn't
