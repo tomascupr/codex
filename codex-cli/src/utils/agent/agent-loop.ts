@@ -574,10 +574,13 @@ export class AgentLoop {
             !this.hardAbort.signal.aborted
           ) {
             // Only the visual rendering gets the small delay
+            // Double-check cancellation state right before emitting to avoid race conditions
             setTimeout(() => {
-              this.onItem(item);
-              // Mark as delivered so flush won't re-emit it
-              staged[idx] = undefined;
+              if (thisGeneration === this.generation && !this.canceled && !this.hardAbort.signal.aborted) {
+                this.onItem(item);
+                // Mark as delivered so flush won't re-emit it
+                staged[idx] = undefined;
+              }
             }, 3); // Small 3ms delay for readable streaming
 
             // Handle transcript immediately - no delay needed for this
@@ -1207,7 +1210,12 @@ export class AgentLoop {
       // Use queueMicrotask for immediate processing with a small delay for UI rendering
       queueMicrotask(() => {
         // Use a small delay to make sure UI rendering is smooth
-        setTimeout(flush, 3);
+        // Double-check cancellation state right before flushing to avoid race conditions
+        setTimeout(() => {
+          if (!this.canceled && !this.hardAbort.signal.aborted && thisGeneration === this.generation) {
+            flush();
+          }
+        }, 3);
       });
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
