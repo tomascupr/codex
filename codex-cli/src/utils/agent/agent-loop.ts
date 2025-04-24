@@ -626,7 +626,7 @@ export class AgentLoop {
               }
             }
           }
-        }, 10);
+        });
       };
 
       while (turnInput.length > 0) {
