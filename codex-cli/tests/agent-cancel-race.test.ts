@@ -10,8 +10,8 @@ class FakeStream {
 
   async *[Symbol.asyncIterator]() {
     // Introduce a delay to simulate network latency and allow for cancel() to be called
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     // Mimic an assistant message containing the word "hello".
     // Our fix should prevent this from being emitted after cancel() is called
     yield {

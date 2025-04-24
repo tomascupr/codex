@@ -576,7 +576,11 @@ export class AgentLoop {
             // Only the visual rendering gets the small delay
             // Double-check cancellation state right before emitting to avoid race conditions
             setTimeout(() => {
-              if (thisGeneration === this.generation && !this.canceled && !this.hardAbort.signal.aborted) {
+              if (
+                thisGeneration === this.generation &&
+                !this.canceled &&
+                !this.hardAbort.signal.aborted
+              ) {
                 this.onItem(item);
                 // Mark as delivered so flush won't re-emit it
                 staged[idx] = undefined;
@@ -1212,7 +1216,11 @@ export class AgentLoop {
         // Use a small delay to make sure UI rendering is smooth
         // Double-check cancellation state right before flushing to avoid race conditions
         setTimeout(() => {
-          if (!this.canceled && !this.hardAbort.signal.aborted && thisGeneration === this.generation) {
+          if (
+            !this.canceled &&
+            !this.hardAbort.signal.aborted &&
+            thisGeneration === this.generation
+          ) {
             flush();
           }
         }, 3);
