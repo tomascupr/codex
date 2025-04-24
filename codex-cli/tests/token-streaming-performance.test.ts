@@ -1,6 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 import type { ResponseItem } from "openai/resources/responses/responses.mjs";
+
+// Mock OpenAI to avoid API key requirement
+vi.mock("openai", () => {
+  class FakeOpenAI {
+    public responses = {
+      create: vi.fn(),
+    };
+  }
+  class APIConnectionTimeoutError extends Error {}
+  return { __esModule: true, default: FakeOpenAI, APIConnectionTimeoutError };
+});
+
+// Stub the logger to avoid file‑system side effects during tests
+vi.mock("../src/utils/logger/log.js", () => ({
+  __esModule: true,
+  log: () => {},
+  isLoggingEnabled: () => false,
+}));
+
+// Import AgentLoop after mocking dependencies
+import { AgentLoop } from "../src/utils/agent/agent-loop.js";
 
 describe("Token streaming performance", () => {
   // Mock callback for collecting tokens and their timestamps
