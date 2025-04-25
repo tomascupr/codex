@@ -563,31 +563,18 @@ export class AgentLoop {
         //   2. If the user calls `cancel()` in the small window right after the
         //      item was staged we can still abort the delivery because the
         //      generation counter will have been bumped by `cancel()`.
-        // Balance performance with user experience:
-        // - Process tokens immediately with queueMicrotask for internal logic
-        // - Use a minimal delay (3ms) for terminal rendering to maintain readable streaming
-        queueMicrotask(() => {
-          // Process token immediately for internal logic
+        // Use a minimal 3ms delay for terminal rendering to maintain readable streaming
+        setTimeout(() => {
           if (
             thisGeneration === this.generation &&
             !this.canceled &&
             !this.hardAbort.signal.aborted
           ) {
-            // Only the visual rendering gets the small delay
-            // Double-check cancellation state right before emitting to avoid race conditions
-            setTimeout(() => {
-              if (
-                thisGeneration === this.generation &&
-                !this.canceled &&
-                !this.hardAbort.signal.aborted
-              ) {
-                this.onItem(item);
-                // Mark as delivered so flush won't re-emit it
-                staged[idx] = undefined;
-              }
-            }, 3); // Small 3ms delay for readable streaming
-
-            // Handle transcript immediately - no delay needed for this
+            this.onItem(item);
+            // Mark as delivered so flush won't re-emit it
+            staged[idx] = undefined;
+            
+            // Handle transcript updates to maintain consistency
             // When we operate without server‑side storage we keep our own
             // transcript so we can provide full context on subsequent calls.
             if (this.disableResponseStorage) {
@@ -633,7 +620,7 @@ export class AgentLoop {
               }
             }
           }
-        });
+        }, 3); // Small 3ms delay for readable streaming
       };
 
       while (turnInput.length > 0) {
@@ -1211,20 +1198,17 @@ export class AgentLoop {
         this.onLoading(false);
       };
 
-      // Use queueMicrotask for immediate processing with a small delay for UI rendering
-      queueMicrotask(() => {
-        // Use a small delay to make sure UI rendering is smooth
-        // Double-check cancellation state right before flushing to avoid race conditions
-        setTimeout(() => {
-          if (
-            !this.canceled &&
-            !this.hardAbort.signal.aborted &&
-            thisGeneration === this.generation
-          ) {
-            flush();
-          }
-        }, 3);
-      });
+      // Use a small delay to make sure UI rendering is smooth
+      // Double-check cancellation state right before flushing to avoid race conditions
+      setTimeout(() => {
+        if (
+          !this.canceled &&
+          !this.hardAbort.signal.aborted &&
+          thisGeneration === this.generation
+        ) {
+          flush();
+        }
+      }, 3);
       // End of main logic. The corresponding catch block for the wrapper at the
       // start of this method follows next.
     } catch (err) {
