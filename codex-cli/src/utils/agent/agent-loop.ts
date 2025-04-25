@@ -573,7 +573,7 @@ export class AgentLoop {
             this.onItem(item);
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
-            
+
             // Handle transcript updates to maintain consistency
             // When we operate without server‑side storage we keep our own
             // transcript so we can provide full context on subsequent calls.
