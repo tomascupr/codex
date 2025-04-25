@@ -575,7 +575,7 @@ export class AgentLoop {
         //      item was staged we can still abort the delivery because the
         //      generation counter will have been bumped by `cancel()`.
         //
-        // Use a minimal 3ms delay for terminal rendering to maintain readable 
+        // Use a minimal 3ms delay for terminal rendering to maintain readable
         // streaming.
         setTimeout(() => {
           if (
@@ -587,7 +587,7 @@ export class AgentLoop {
             // Mark as delivered so flush won't re-emit it
             staged[idx] = undefined;
 
-            // Handle transcript updates to maintain consistency. When we 
+            // Handle transcript updates to maintain consistency. When we
             // operate without server‑side storage we keep our own transcript
             // so we can provide full context on subsequent calls.
             if (this.disableResponseStorage) {
