@@ -66,7 +66,7 @@ describe("Token streaming performance", () => {
           role: "assistant",
           content: [{ type: "output_text", text: `Token ${i}` }],
           status: "completed",
-        } as ResponseItem),
+        }) as ResponseItem,
     );
 
     // Call run with some input
