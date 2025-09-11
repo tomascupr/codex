@@ -16,7 +16,6 @@ use crate::client::ModelClient;
 use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
 use crate::openai_tools::{ToolsConfig, get_openai_tools};
-use crate::protocol::Origin;
 use codex_protocol::models::{ContentItem, ResponseItem};
 
 /// A sub-agent definition loaded from a markdown file with YAML frontmatter.
@@ -44,6 +43,12 @@ pub struct SubAgent {
 pub struct AgentRegistry {
     /// Map of agent name -> agent definition
     agents: HashMap<String, SubAgent>,
+}
+
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AgentRegistry {
@@ -170,8 +175,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
         return Err(CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Agent '{}' missing YAML frontmatter (must start with '---')",
-                agent_name
+                "Agent '{agent_name}' missing YAML frontmatter (must start with '---')"
             ),
         )));
     }
@@ -184,7 +188,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
         .ok_or_else(|| {
             CodexErr::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Agent '{}' missing frontmatter closing '---'", agent_name),
+                format!("Agent '{agent_name}' missing frontmatter closing '---'"),
             ))
         })?;
 
@@ -208,8 +212,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
         CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Failed to parse YAML frontmatter for agent '{}': {}",
-                agent_name, e
+                "Failed to parse YAML frontmatter for agent '{agent_name}': {e}"
             ),
         ))
     })?;
@@ -218,7 +221,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
     if frontmatter.description.trim().is_empty() {
         return Err(CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Agent '{}' must have a non-empty description", agent_name),
+            format!("Agent '{agent_name}' must have a non-empty description"),
         )));
     }
 
@@ -226,8 +229,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
         return Err(CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Agent '{}' must have a non-empty body (system prompt)",
-                agent_name
+                "Agent '{agent_name}' must have a non-empty body (system prompt)"
             ),
         )));
     }
@@ -238,7 +240,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
             if tool.trim().is_empty() {
                 return Err(CodexErr::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("Agent '{}' has empty tool name in allowlist", agent_name),
+                    format!("Agent '{agent_name}' has empty tool name in allowlist"),
                 )));
             }
         }
@@ -296,7 +298,7 @@ pub fn discover_and_load_agents(project_root: Option<&Path>) -> Result<AgentRegi
 }
 
 /// Tool filtering based on agent allowlists
-pub fn filter_tools_for_agent(
+pub(crate) fn filter_tools_for_agent(
     tools: &[crate::openai_tools::OpenAiTool],
     allowed_tools: Option<&[String]>,
 ) -> Vec<crate::openai_tools::OpenAiTool> {
@@ -308,17 +310,36 @@ pub fn filter_tools_for_agent(
                 return Vec::new();
             }
 
-            // Filter tools based on allowlist
+            use std::collections::HashSet;
+            // Build an expanded allowlist that treats different shell variants as aliases.
+            // Any of these in the user-provided allowlist will enable the whole group:
+            // - "shell" (function tool)
+            // - "local_shell" (native local shell tool)
+            // - "exec_command" / "write_stdin" (streamable shell pair)
+            let mut expanded: HashSet<String> = allowlist.iter().cloned().collect();
+            let shell_aliases = [
+                "shell".to_string(),
+                "local_shell".to_string(),
+                crate::exec_command::EXEC_COMMAND_TOOL_NAME.to_string(),
+                crate::exec_command::WRITE_STDIN_TOOL_NAME.to_string(),
+            ];
+            if allowlist.iter().any(|t| shell_aliases.contains(t)) {
+                for a in shell_aliases.iter() {
+                    expanded.insert(a.clone());
+                }
+            }
+
+            // Filter tools based on expanded allowlist
             tools
                 .iter()
                 .filter(|tool| {
                     let tool_name = match tool {
-                        crate::openai_tools::OpenAiTool::Function(f) => &f.name,
+                        crate::openai_tools::OpenAiTool::Function(f) => f.name.as_str(),
                         crate::openai_tools::OpenAiTool::LocalShell {} => "local_shell",
                         crate::openai_tools::OpenAiTool::WebSearch {} => "web_search",
-                        crate::openai_tools::OpenAiTool::Freeform(f) => &f.name,
+                        crate::openai_tools::OpenAiTool::Freeform(f) => f.name.as_str(),
                     };
-                    allowlist.contains(&tool_name.to_string())
+                    expanded.contains(tool_name)
                 })
                 .cloned()
                 .collect()
@@ -361,7 +382,7 @@ impl NestedAgentRunner {
 
     /// Execute a sub-agent with the given task
     /// Creates an isolated conversation context and applies tool filtering enforcement
-    pub async fn run_agent(
+    pub(crate) async fn run_agent(
         &self,
         name: &str,
         task: &str,
@@ -423,11 +444,9 @@ impl NestedAgentRunner {
 
         // Use the parent client to stream the conversation with filtered tools
         let response_stream = _parent_client.stream(&prompt).await.map_err(|e| {
-            CodexErr::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            CodexErr::Io(std::io::Error::other(
                 format!(
-                    "Failed to start model conversation for sub-agent '{}': {}",
-                    name, e
+                    "Failed to start model conversation for sub-agent '{name}': {e}"
                 ),
             ))
         })?;
@@ -468,11 +487,11 @@ impl NestedAgentRunner {
                                     conversation_history.record_items([&item]);
                                 }
                                 ResponseItem::LocalShellCall { action, .. } => {
-                                    tool_calls_made.push(format!("Shell call: {:?}", action));
+                                    tool_calls_made.push(format!("Shell call: {action:?}"));
                                     conversation_history.record_items([&item]);
                                 }
                                 ResponseItem::CustomToolCall { name, .. } => {
-                                    tool_calls_made.push(format!("Custom tool call: {}", name));
+                                    tool_calls_made.push(format!("Custom tool call: {name}"));
                                     conversation_history.record_items([&item]);
                                 }
                                 ResponseItem::FunctionCallOutput {
@@ -526,7 +545,7 @@ impl NestedAgentRunner {
                 }
                 Err(e) => {
                     success = false;
-                    error_message = Some(format!("Stream error in sub-agent '{}': {}", name, e));
+                    error_message = Some(format!("Stream error in sub-agent '{name}': {e}"));
                     tracing::error!("Sub-agent '{}' failed with stream error: {}", name, e);
                     break;
                 }
@@ -541,9 +560,9 @@ impl NestedAgentRunner {
         };
 
         let final_output = if output_text.is_empty() {
-            format!("Sub-agent '{}' completed. {}", name, tool_summary)
+            format!("Sub-agent '{name}' completed. {tool_summary}")
         } else {
-            format!("{}\n\n{}", output_text, tool_summary)
+            format!("{output_text}\n\n{tool_summary}")
         };
 
         tracing::info!(

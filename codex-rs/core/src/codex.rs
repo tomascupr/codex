@@ -2574,19 +2574,418 @@ impl SubAgentManager {
             ..turn_context.tools_config.clone()
         };
 
-        // Execute the sub-agent
-        let result = self
-            .agent_runner
-            .run_agent(
-                &args.name,
-                &args.task,
-                &nested_tools_config,
-                &turn_context.client,
-            )
-            .await;
+        // Describe the agent to obtain its prompt body and allowlist.
+        let agent_desc = match self.agent_runner.describe_agent(&args.name) {
+            Ok(d) => d,
+            Err(e) => {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("Agent not found: {e}"),
+                        success: Some(false),
+                    },
+                };
+            }
+        };
+
+        // Build the system prompt for the sub-agent.
+        let system_prompt = format!("{}\n\nTask: {}", agent_desc.body, args.task);
+
+        // Compute available tools for the nested context, then filter by the agent's allowlist.
+        let available_tools = crate::openai_tools::get_openai_tools(
+            &nested_tools_config,
+            Some(sess.mcp_connection_manager.list_all_tools()),
+        );
+        let filtered_tools =
+            crate::agents::filter_tools_for_agent(&available_tools, agent_desc.tools.as_deref());
+
+        // Local, isolated conversation transcript (do not pollute the main session history).
+        let mut conversation: Vec<ResponseItem> = Vec::new();
+        conversation.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: system_prompt,
+            }],
+            origin: None,
+        });
+
+        // Track outputs and tool calls for result summary.
+        let mut output_text = String::new();
+        let mut tool_calls_made: Vec<String> = Vec::new();
+        let mut success = true;
+        let mut error_message: Option<String> = None;
+
+        // Diff tracker for apply_patch rendering (stdout overlay etc.).
+        let mut turn_diff_tracker = TurnDiffTracker::new();
+
+        // Multi-turn loop: keep calling the model until it emits a final assistant message with no further tool calls.
+        'outer: loop {
+            let prompt = Prompt {
+                input: conversation.clone(),
+                tools: filtered_tools.clone(),
+                base_instructions_override: None,
+            };
+
+            let mut stream = match turn_context.client.clone().stream(&prompt).await {
+                Ok(s) => s,
+                Err(e) => {
+                    success = false;
+                    error_message = Some(format!(
+                        "Failed to start model conversation for sub-agent '{}': {}",
+                        args.name, e
+                    ));
+                    break;
+                }
+            };
+
+            let mut pending_function_outputs: Vec<ResponseInputItem> = Vec::new();
+
+            // Drain one model turn.
+            while let Some(ev) = stream.rx_event.recv().await {
+                match ev {
+                    Ok(ResponseEvent::OutputItemDone(item)) => {
+                        match &item {
+                            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                                for c in content {
+                                    if let ContentItem::OutputText { text } = c {
+                                        output_text.push_str(text);
+                                    }
+                                }
+                                conversation.push(item.clone());
+                            }
+                            ResponseItem::LocalShellCall {
+                                id,
+                                call_id,
+                                status: _,
+                                action,
+                                ..
+                            } => {
+                                tool_calls_made.push(format!("Shell call: {action:?}"));
+                                conversation.push(item.clone());
+                                let effective_call_id = match (call_id.clone(), id.clone()) {
+                                    (Some(call_id), _) => call_id,
+                                    (None, Some(id)) => id,
+                                    (None, None) => "".to_string(),
+                                };
+                                let params = match action.clone() {
+                                    LocalShellAction::Exec(exec) => ShellToolCallParams {
+                                        command: exec.command,
+                                        workdir: exec.working_directory,
+                                        timeout_ms: exec.timeout_ms,
+                                        with_escalated_permissions: None,
+                                        justification: None,
+                                    },
+                                };
+                                let exec_params = to_exec_params(params, turn_context);
+                                let resp = handle_container_exec_with_params(
+                                    exec_params,
+                                    sess,
+                                    turn_context,
+                                    &mut turn_diff_tracker,
+                                    sub_id.to_string(),
+                                    effective_call_id,
+                                )
+                                .await;
+                                if let ResponseInputItem::FunctionCallOutput { ref call_id, ref output } =
+                                    resp
+                                {
+                                    conversation.push(ResponseItem::FunctionCallOutput {
+                                        call_id: call_id.clone(),
+                                        output: output.clone(),
+                                        origin: None,
+                                    });
+                                }
+                                pending_function_outputs.push(resp);
+                            }
+                            ResponseItem::FunctionCall {
+                                name,
+                                arguments,
+                                call_id,
+                                ..
+                            } => {
+                                tool_calls_made
+                                    .push(format!("Function call: {name} (id: {call_id})"));
+                                conversation.push(item.clone());
+
+                                // Deny sub-agent calls in nested context to avoid recursion.
+                                let resp = if matches!(
+                                    name.as_str(),
+                                    "subagent_list" | "subagent_describe" | "subagent_run"
+                                ) {
+                                    ResponseInputItem::FunctionCallOutput {
+                                        call_id: call_id.clone(),
+                                        output: FunctionCallOutputPayload {
+                                            content:
+                                                "Sub-agents are not enabled in this nested context"
+                                                    .to_string(),
+                                            success: Some(false),
+                                        },
+                                    }
+                                } else if matches!(name.as_str(), "container.exec" | "shell") {
+                                    match parse_container_exec_arguments(
+                                        arguments.clone(),
+                                        turn_context,
+                                        call_id,
+                                    ) {
+                                        Ok(params) => {
+                                            handle_container_exec_with_params(
+                                                params,
+                                                sess,
+                                                turn_context,
+                                                &mut turn_diff_tracker,
+                                                sub_id.to_string(),
+                                                call_id.clone(),
+                                            )
+                                            .await
+                                        }
+                                        Err(output) => *output,
+                                    }
+                                } else if name == crate::exec_command::EXEC_COMMAND_TOOL_NAME {
+                                    match serde_json::from_str::<
+                                        crate::exec_command::ExecCommandParams,
+                                    >(arguments)
+                                    {
+                                        Ok(exec_params) => {
+                                            let result = sess
+                                                .session_manager
+                                                .handle_exec_command_request(exec_params)
+                                                .await;
+                                            let output =
+                                                crate::exec_command::result_into_payload(result);
+                                            ResponseInputItem::FunctionCallOutput {
+                                                call_id: call_id.clone(),
+                                                output,
+                                            }
+                                        }
+                                        Err(e) => ResponseInputItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: FunctionCallOutputPayload {
+                                                content: format!(
+                                                    "failed to parse function arguments: {e}"
+                                                ),
+                                                success: Some(false),
+                                            },
+                                        },
+                                    }
+                                } else if name == crate::exec_command::WRITE_STDIN_TOOL_NAME {
+                                    match serde_json::from_str::<WriteStdinParams>(arguments) {
+                                        Ok(write_stdin_params) => {
+                                            let result = sess
+                                                .session_manager
+                                                .handle_write_stdin_request(write_stdin_params)
+                                                .await;
+                                            let output =
+                                                crate::exec_command::result_into_payload(result);
+                                            ResponseInputItem::FunctionCallOutput {
+                                                call_id: call_id.clone(),
+                                                output,
+                                            }
+                                        }
+                                        Err(e) => ResponseInputItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: FunctionCallOutputPayload {
+                                                content: format!(
+                                                    "failed to parse function arguments: {e}"
+                                                ),
+                                                success: Some(false),
+                                            },
+                                        },
+                                    }
+                                } else if name == "apply_patch" {
+                                    match serde_json::from_str::<ApplyPatchToolArgs>(arguments) {
+                                        Ok(args) => {
+                                            let exec_params = ExecParams {
+                                                command: vec![
+                                                    "apply_patch".to_string(),
+                                                    args.input.clone(),
+                                                ],
+                                                cwd: turn_context.cwd.clone(),
+                                                timeout_ms: None,
+                                                env: HashMap::new(),
+                                                with_escalated_permissions: None,
+                                                justification: None,
+                                            };
+                                            handle_container_exec_with_params(
+                                                exec_params,
+                                                sess,
+                                                turn_context,
+                                                &mut turn_diff_tracker,
+                                                sub_id.to_string(),
+                                                call_id.clone(),
+                                            )
+                                            .await
+                                        }
+                                        Err(e) => ResponseInputItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: FunctionCallOutputPayload {
+                                                content: format!(
+                                                    "failed to parse function arguments: {e}"
+                                                ),
+                                                success: None,
+                                            },
+                                        },
+                                    }
+                                } else if name == "view_image" {
+                                    #[derive(serde::Deserialize)]
+                                    struct SeeImageArgs {
+                                        path: String,
+                                    }
+                                    match serde_json::from_str::<SeeImageArgs>(arguments) {
+                                        Ok(args) => {
+                                            let abs = turn_context.resolve_path(Some(args.path));
+                                            let output = match sess.inject_input(vec![
+                                                InputItem::LocalImage { path: abs },
+                                            ]) {
+                                                Ok(()) => FunctionCallOutputPayload {
+                                                    content: "attached local image path"
+                                                        .to_string(),
+                                                    success: Some(true),
+                                                },
+                                                Err(_) => FunctionCallOutputPayload {
+                                                    content:
+                                                        "unable to attach image (no active task)"
+                                                            .to_string(),
+                                                    success: Some(false),
+                                                },
+                                            };
+                                            ResponseInputItem::FunctionCallOutput {
+                                                call_id: call_id.clone(),
+                                                output,
+                                            }
+                                        }
+                                        Err(e) => ResponseInputItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: FunctionCallOutputPayload {
+                                                content: format!(
+                                                    "failed to parse function arguments: {e}"
+                                                ),
+                                                success: Some(false),
+                                            },
+                                        },
+                                    }
+                                } else if name == "update_plan" {
+                                    handle_update_plan(
+                                        sess,
+                                        arguments.clone(),
+                                        sub_id.to_string(),
+                                        call_id.clone(),
+                                    )
+                                    .await
+                                } else {
+                                    ResponseInputItem::FunctionCallOutput {
+                                        call_id: call_id.clone(),
+                                        output: FunctionCallOutputPayload {
+                                            content: format!("unsupported function call: {name}"),
+                                            success: Some(false),
+                                        },
+                                    }
+                                };
+
+                                match &resp {
+                                    ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                                        conversation.push(ResponseItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: output.clone(),
+                                            origin: None,
+                                        });
+                                    }
+                                    ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                                        conversation.push(ResponseItem::CustomToolCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: output.clone(),
+                                            origin: None,
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                                pending_function_outputs.push(resp);
+                            }
+                            ResponseItem::CustomToolCall {
+                                name,
+                                input,
+                                call_id,
+                                ..
+                            } => {
+                                tool_calls_made.push(format!("Custom tool call: {name}"));
+                                conversation.push(item.clone());
+                                let resp = handle_custom_tool_call(
+                                    sess,
+                                    turn_context,
+                                    &mut turn_diff_tracker,
+                                    sub_id.to_string(),
+                                    name.clone(),
+                                    input.clone(),
+                                    call_id.clone(),
+                                )
+                                .await;
+                                match &resp {
+                                    ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                                        conversation.push(ResponseItem::CustomToolCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: output.clone(),
+                                            origin: None,
+                                        });
+                                    }
+                                    ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                                        conversation.push(ResponseItem::FunctionCallOutput {
+                                            call_id: call_id.clone(),
+                                            output: output.clone(),
+                                            origin: None,
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                                pending_function_outputs.push(resp);
+                            }
+                            _ => {
+                                conversation.push(item.clone());
+                            }
+                        }
+                    }
+                    Ok(ResponseEvent::Completed { .. }) => {
+                        // If we produced any tool outputs this turn, the loop will continue with them in the transcript.
+                        if pending_function_outputs.is_empty() {
+                            break 'outer;
+                        } else {
+                            break; // proceed to next turn
+                        }
+                    }
+                    Ok(ResponseEvent::OutputTextDelta(_)) => {}
+                    Ok(ResponseEvent::ReasoningContentDelta(_)) => {}
+                    Ok(_) => {}
+                    Err(e) => {
+                        success = false;
+                        error_message =
+                            Some(format!("Stream error in sub-agent '{}': {}", args.name, e));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+
+        // Summarize tool usage and output text
+        let tool_summary = if tool_calls_made.is_empty() {
+            "No tool calls were made".to_string()
+        } else {
+            format!("Tool calls made: {}", tool_calls_made.join(", "))
+        };
+        let final_output = if output_text.is_empty() {
+            format!("Sub-agent '{}' completed. {}", args.name, tool_summary)
+        } else {
+            format!("{output_text}\n\n{tool_summary}")
+        };
+
+        let sub_result = crate::agents::SubAgentResult {
+            agent_name: args.name.clone(),
+            task: args.task.clone(),
+            success,
+            output: final_output,
+            error: error_message,
+        };
 
         // Create SubAgentEnd ResponseItem for persistence
-        let success = result.as_ref().map_or(false, |r| r.success);
+        let success = success;
         let end_response_item = ResponseItem::SubAgentEnd {
             name: args.name.clone(),
             success,
@@ -2610,25 +3009,14 @@ impl SubAgentManager {
         sess.record_conversation_items(&[end_response_item]).await;
 
         // Return result
-        match result {
-            Ok(sub_result) => {
-                let output = serde_json::to_string(&sub_result)
-                    .unwrap_or_else(|e| format!("Failed to serialize sub-agent result: {e}"));
+        let output = serde_json::to_string(&sub_result)
+            .unwrap_or_else(|e| format!("Failed to serialize sub-agent result: {e}"));
 
-                ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: output,
-                        success: Some(sub_result.success),
-                    },
-                }
-            }
-            Err(e) => ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("Sub-agent execution failed: {e}"),
-                    success: Some(false),
-                },
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: output,
+                success: Some(sub_result.success),
             },
         }
     }

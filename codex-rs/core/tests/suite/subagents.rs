@@ -3,8 +3,8 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use codex_core::agents::{
-    discover_and_load_agents, load_agents_from_directory, 
     AgentRegistry, NestedAgentRunner, SubAgent, SubAgentDescription, SubAgentResult,
+    discover_and_load_agents, load_agents_from_directory,
 };
 
 /// Create test agents in a directory
@@ -64,7 +64,10 @@ async fn test_agent_discovery_and_loading() {
     assert!(registry.has_agent("no-tools"));
 
     let agent_names = registry.list_agents();
-    assert_eq!(agent_names, vec!["general", "multi-tool", "no-tools", "restricted"]);
+    assert_eq!(
+        agent_names,
+        vec!["general", "multi-tool", "no-tools", "restricted"]
+    );
 }
 
 #[test]
@@ -84,7 +87,10 @@ fn test_load_agents_from_directory() {
 
     let restricted_agent = agents.iter().find(|a| a.name == "restricted").unwrap();
     assert_eq!(restricted_agent.description, "A restricted test agent");
-    assert_eq!(restricted_agent.tools, Some(vec!["local_shell".to_string()]));
+    assert_eq!(
+        restricted_agent.tools,
+        Some(vec!["local_shell".to_string()])
+    );
 
     let no_tools_agent = agents.iter().find(|a| a.name == "no-tools").unwrap();
     assert_eq!(no_tools_agent.description, "An agent with no tools");
@@ -146,13 +152,16 @@ fn test_agent_registry_operations() {
     assert_eq!(registry.len(), 2); // Still 2 agents
     let updated = registry.get_agent("test1").unwrap();
     assert_eq!(updated.description, "Updated test agent 1");
-    assert_eq!(updated.tools, Some(vec!["local_shell".to_string(), "web_search".to_string()]));
+    assert_eq!(
+        updated.tools,
+        Some(vec!["local_shell".to_string(), "web_search".to_string()])
+    );
 }
 
 #[test]
 fn test_nested_agent_runner_basic_operations() {
     let mut registry = AgentRegistry::new();
-    
+
     let test_agent = SubAgent {
         name: "test-runner".to_string(),
         description: "A test runner agent".to_string(),
@@ -192,10 +201,13 @@ fn test_subagent_serialization() {
 
     let serialized = serde_json::to_string(&description).unwrap();
     let deserialized: SubAgentDescription = serde_json::from_str(&serialized).unwrap();
-    
+
     assert_eq!(deserialized.name, "test-agent");
     assert_eq!(deserialized.description, "A test agent");
-    assert_eq!(deserialized.tools, Some(vec!["local_shell".to_string(), "web_search".to_string()]));
+    assert_eq!(
+        deserialized.tools,
+        Some(vec!["local_shell".to_string(), "web_search".to_string()])
+    );
     assert_eq!(deserialized.body, "Test system prompt");
 
     // Test SubAgentResult serialization
@@ -209,7 +221,7 @@ fn test_subagent_serialization() {
 
     let serialized = serde_json::to_string(&result).unwrap();
     let deserialized: SubAgentResult = serde_json::from_str(&serialized).unwrap();
-    
+
     assert_eq!(deserialized.agent_name, "test-agent");
     assert_eq!(deserialized.task, "Test task");
     assert!(deserialized.success);
@@ -227,7 +239,7 @@ fn test_subagent_serialization() {
 
     let serialized = serde_json::to_string(&error_result).unwrap();
     let deserialized: SubAgentResult = serde_json::from_str(&serialized).unwrap();
-    
+
     assert_eq!(deserialized.agent_name, "failing-agent");
     assert!(!deserialized.success);
     assert_eq!(deserialized.error, Some("Something went wrong".to_string()));
@@ -309,7 +321,11 @@ I am a project-specific agent."#;
 description: "Project-only agent"
 ---
 I am only in the project."#;
-    write(project_agents_dir.join("project-only.md"), project_only_agent).unwrap();
+    write(
+        project_agents_dir.join("project-only.md"),
+        project_only_agent,
+    )
+    .unwrap();
 
     // Load agents from project directory
     let registry = discover_and_load_agents(Some(project_root)).unwrap();
@@ -383,10 +399,10 @@ fn test_edge_cases() {
     assert_eq!(names.len(), 100);
     assert_eq!(names[0], "agent000");
     assert_eq!(names[99], "agent099");
-    
+
     // Verify sorting is correct
     for i in 1..names.len() {
-        assert!(names[i-1] <= names[i]);
+        assert!(names[i - 1] <= names[i]);
     }
 }
 
@@ -448,14 +464,17 @@ Use tools carefully and always validate input.
     // Load the agent
     let agents = load_agents_from_directory(&agents_dir).unwrap();
     assert_eq!(agents.len(), 1);
-    
+
     let agent = &agents[0];
     assert_eq!(agent.name, "special");
     assert!(agent.description.contains("ñ"));
     assert!(agent.description.contains("中文"));
     assert!(agent.description.contains("🤖"));
     assert!(agent.body.contains("unicode"));
-    assert_eq!(agent.tools, Some(vec!["local_shell".to_string(), "web_search".to_string()]));
+    assert_eq!(
+        agent.tools,
+        Some(vec!["local_shell".to_string(), "web_search".to_string()])
+    );
 }
 
 #[test]
@@ -489,15 +508,18 @@ Please use these responsibly."#;
 
     let agents = load_agents_from_directory(agents_dir).unwrap();
     assert_eq!(agents.len(), 1);
-    
+
     let agent = &agents[0];
     assert_eq!(agent.name, "complex");
     assert!(agent.description.contains("multi-line description"));
     assert!(agent.description.contains("spans several lines"));
-    assert_eq!(agent.tools, Some(vec![
-        "local_shell".to_string(),
-        "web_search".to_string(),
-        "apply_patch".to_string()
-    ]));
+    assert_eq!(
+        agent.tools,
+        Some(vec![
+            "local_shell".to_string(),
+            "web_search".to_string(),
+            "apply_patch".to_string()
+        ])
+    );
     assert!(agent.body.contains("Your capabilities"));
 }
