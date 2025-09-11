@@ -934,6 +934,27 @@ Use them wisely to accomplish tasks.
     }
 
     #[test]
+    fn test_frontmatter_name_mismatch_warns_and_uses_filename() {
+        // Frontmatter declares a different name than the filename; we should use the filename.
+        let content = r#"---
+name: "declared-name"
+description: "Agent with declared name"
+tools: ["local_shell"]
+---
+
+This is the agent body.
+"#;
+
+        let agent = parse_agent_markdown(content, "filename-name".to_string()).unwrap();
+
+        // Canonical name must come from the filename, not the frontmatter.
+        assert_eq!(agent.name, "filename-name");
+        assert_eq!(agent.description, "Agent with declared name");
+        assert_eq!(agent.tools, Some(vec!["local_shell".to_string()]));
+        assert!(agent.body.contains("agent body"));
+    }
+
+    #[test]
     fn test_load_agents_from_nonexistent_directory() {
         use std::path::Path;
 
