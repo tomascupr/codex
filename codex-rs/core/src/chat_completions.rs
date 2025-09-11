@@ -64,6 +64,8 @@ pub(crate) async fn stream_chat_completions(
             ResponseItem::CustomToolCall { .. } => {}
             ResponseItem::CustomToolCallOutput { .. } => {}
             ResponseItem::WebSearchCall { .. } => {}
+            ResponseItem::SubAgentStart { .. } => {}
+            ResponseItem::SubAgentEnd { .. } => {}
         }
     }
 
@@ -205,6 +207,7 @@ pub(crate) async fn stream_chat_completions(
                 call_id: _,
                 status,
                 action,
+                ..
             } => {
                 // Confirm with API team.
                 let mut msg = json!({
@@ -224,7 +227,9 @@ pub(crate) async fn stream_chat_completions(
                 }
                 messages.push(msg);
             }
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            } => {
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -237,6 +242,7 @@ pub(crate) async fn stream_chat_completions(
                 name,
                 input,
                 status: _,
+                ..
             } => {
                 messages.push(json!({
                     "role": "assistant",
@@ -251,7 +257,9 @@ pub(crate) async fn stream_chat_completions(
                     }]
                 }));
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
+            ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => {
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
@@ -260,6 +268,8 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::Reasoning { .. }
             | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::SubAgentStart { .. }
+            | ResponseItem::SubAgentEnd { .. }
             | ResponseItem::Other => {
                 // Omit these items from the conversation history.
                 continue;
@@ -408,6 +418,7 @@ async fn process_chat_sse<S>(
                         text: std::mem::take(&mut assistant_text),
                     }],
                     id: None,
+                    origin: None,
                 };
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
@@ -420,6 +431,7 @@ async fn process_chat_sse<S>(
                         text: std::mem::take(&mut reasoning_text),
                     }]),
                     encrypted_content: None,
+                    origin: None,
                 };
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
@@ -557,6 +569,7 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut reasoning_text),
                                 }]),
                                 encrypted_content: None,
+                                origin: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -567,6 +580,7 @@ async fn process_chat_sse<S>(
                             name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
                             arguments: fn_call_state.arguments.clone(),
                             call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
+                            origin: None,
                         };
 
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
@@ -581,6 +595,7 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut assistant_text),
                                 }],
                                 id: None,
+                                origin: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -593,6 +608,7 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut reasoning_text),
                                 }]),
                                 encrypted_content: None,
+                                origin: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -736,6 +752,7 @@ where
                                     },
                                 ]),
                                 encrypted_content: None,
+                                origin: None,
                             };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
@@ -754,6 +771,7 @@ where
                             content: vec![codex_protocol::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
+                            origin: None,
                         };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_message));

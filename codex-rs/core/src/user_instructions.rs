@@ -37,6 +37,7 @@ impl From<UserInstructions> for ResponseItem {
             content: vec![ContentItem::InputText {
                 text: ui.serialize_to_xml(),
             }],
+            origin: None,
         }
     }
 }

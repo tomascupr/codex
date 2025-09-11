@@ -24,6 +24,7 @@ use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -179,6 +180,10 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+
+    /// Include sub-agent tools that enable delegation of tasks to specialized agents.
+    pub include_subagent_tools: bool,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -489,6 +494,10 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
+    /// Include sub-agent tools that enable delegation of tasks to specialized agents.
+    #[serde(default)]
+    pub include_subagent_tools: Option<bool>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -523,7 +532,7 @@ pub struct ProjectConfig {
     pub trust_level: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Serialize, Debug, Clone, Default)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
@@ -531,6 +540,10 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Enable sub-agent tools that allow delegation of tasks to specialized agents.
+    #[serde(default, alias = "subagent_tools")]
+    pub include_subagent_tools: Option<bool>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -538,6 +551,7 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+            subagent_tools: tools_toml.include_subagent_tools,
         }
     }
 }
@@ -630,6 +644,7 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub include_subagent_tools: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -657,6 +672,7 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
+            include_subagent_tools,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
@@ -727,6 +743,11 @@ impl Config {
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
+
+        let include_subagent_tools = include_subagent_tools
+            .or(cfg.include_subagent_tools)
+            .or(cfg.tools.as_ref().and_then(|t| t.include_subagent_tools))
+            .unwrap_or(false);
 
         let model = model
             .or(config_profile.model)
@@ -832,6 +853,7 @@ impl Config {
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            include_subagent_tools,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
         };
         Ok(config)
@@ -1207,6 +1229,7 @@ model_verbosity = "high"
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
+                include_subagent_tools: false,
                 disable_paste_burst: false,
             },
             o3_profile_config
@@ -1264,6 +1287,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             disable_paste_burst: false,
         };
 
@@ -1336,6 +1360,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             disable_paste_burst: false,
         };
 
@@ -1394,6 +1419,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             disable_paste_burst: false,
         };
 
@@ -1428,6 +1454,232 @@ trust_level = "trusted"
         assert_eq!(contents, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_subagent_tools_config_parsing() {
+        // Test parsing sub-agent tools configuration from TOML
+        let config_with_subagent_tools = r#"
+include_subagent_tools = true
+
+[tools]
+view_image = true
+include_subagent_tools = false  # This should be overridden by the top-level setting
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_subagent_tools)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(cfg.include_subagent_tools, Some(true));
+        assert_eq!(
+            cfg.tools.as_ref().unwrap().include_subagent_tools,
+            Some(false)
+        );
+
+        // Test tools-only configuration
+        let config_tools_only = r#"
+[tools]
+view_image = true
+include_subagent_tools = true
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_tools_only)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(cfg.include_subagent_tools, None);
+        assert_eq!(
+            cfg.tools.as_ref().unwrap().include_subagent_tools,
+            Some(true)
+        );
+
+        // Test alias parsing
+        let config_with_alias = r#"
+[tools]
+subagent_tools = true
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_with_alias)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            cfg.tools.as_ref().unwrap().include_subagent_tools,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_subagent_tools_precedence() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        // Test CLI override has highest precedence
+        let overrides_with_subagent_tools = ConfigOverrides {
+            cwd: Some(fixture.cwd()),
+            include_subagent_tools: Some(false), // Override to false
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            overrides_with_subagent_tools,
+            fixture.codex_home(),
+        )?;
+
+        assert!(!config.include_subagent_tools); // Should be overridden to false
+
+        // Test default behavior without overrides
+        let default_overrides = ConfigOverrides {
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+
+        let default_config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            default_overrides,
+            fixture.codex_home(),
+        )?;
+
+        assert!(!default_config.include_subagent_tools); // Should default to false
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_with_subagent_tools_disabled() {
+        let config_disabled = r#"
+model = "gpt-3.5-turbo"
+include_subagent_tools = false
+
+[tools]
+view_image = true
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(config_disabled)
+            .expect("TOML deserialization should succeed");
+
+        assert_eq!(cfg.include_subagent_tools, Some(false));
+        assert_eq!(cfg.tools.as_ref().unwrap().view_image, Some(true));
+        assert_eq!(cfg.tools.as_ref().unwrap().include_subagent_tools, None);
+    }
+
+    #[test]
+    fn test_tools_toml_serialization() {
+        use serde_json;
+
+        let tools = ToolsToml {
+            web_search: Some(true),
+            view_image: Some(false),
+            include_subagent_tools: Some(true),
+        };
+
+        // Test serialization to JSON (for debugging)
+        let serialized = serde_json::to_string(&tools).unwrap();
+        assert!(serialized.contains("true"));
+        assert!(serialized.contains("false"));
+
+        // Test TOML round-trip
+        let toml_str = toml::to_string(&tools).unwrap();
+        let deserialized: ToolsToml = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(deserialized.web_search, Some(true));
+        assert_eq!(deserialized.view_image, Some(false));
+        assert_eq!(deserialized.include_subagent_tools, Some(true));
+    }
+
+    #[test]
+    fn test_config_overrides_subagent_tools() -> std::io::Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let cwd = temp_dir.path().to_path_buf();
+        std::fs::write(cwd.join(".git"), "gitdir: nowhere")?; // Make it look like a git repo
+
+        let codex_home = TempDir::new().unwrap();
+        let codex_home_path = codex_home.path().to_path_buf();
+
+        // Create a base config with sub-agent tools enabled
+        let base_config = ConfigToml {
+            model: Some("gpt-3.5-turbo".to_string()),
+            include_subagent_tools: Some(true),
+            tools: Some(ToolsToml {
+                web_search: Some(false),
+                view_image: Some(true),
+                include_subagent_tools: Some(false), // This should be overridden by top-level
+            }),
+            ..Default::default()
+        };
+
+        // Test with override disabling sub-agent tools
+        let overrides = ConfigOverrides {
+            cwd: Some(cwd.clone()),
+            include_subagent_tools: Some(false),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            base_config.clone(),
+            overrides,
+            codex_home_path.clone(),
+        )?;
+
+        assert!(!config.include_subagent_tools);
+
+        // Test with override enabling sub-agent tools
+        let overrides_enabled = ConfigOverrides {
+            cwd: Some(cwd),
+            include_subagent_tools: Some(true),
+            ..Default::default()
+        };
+
+        let config_enabled = Config::load_from_base_config_with_overrides(
+            base_config,
+            overrides_enabled,
+            codex_home_path,
+        )?;
+
+        assert!(config_enabled.include_subagent_tools);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_complex_tools_configuration() {
+        // Test a complex configuration with multiple tool settings
+        let complex_config = r#"
+model = "o3"
+approval_policy = "never"
+
+[tools]
+web_search = true
+view_image = false
+include_subagent_tools = true
+
+[profiles.dev]
+model = "gpt-3.5-turbo"
+include_subagent_tools = false
+
+[profiles.prod]
+model = "o3"
+[profiles.prod.tools]
+include_subagent_tools = true
+view_image = true
+"#;
+
+        let cfg = toml::from_str::<ConfigToml>(complex_config)
+            .expect("TOML deserialization should succeed");
+
+        // Check main configuration
+        assert_eq!(cfg.model, Some("o3".to_string()));
+        assert_eq!(cfg.tools.as_ref().unwrap().web_search, Some(true));
+        assert_eq!(cfg.tools.as_ref().unwrap().view_image, Some(false));
+        assert_eq!(
+            cfg.tools.as_ref().unwrap().include_subagent_tools,
+            Some(true)
+        );
+
+        // Check profiles
+        assert!(cfg.profiles.contains_key("dev"));
+        assert!(cfg.profiles.contains_key("prod"));
+
+        let dev_profile = &cfg.profiles["dev"];
+        assert_eq!(dev_profile.model, Some("gpt-3.5-turbo".to_string()));
+
+        let prod_profile = &cfg.profiles["prod"];
+        assert_eq!(prod_profile.model, Some("o3".to_string()));
     }
 
     #[test]

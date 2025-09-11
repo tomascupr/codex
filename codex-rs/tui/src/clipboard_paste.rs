@@ -78,7 +78,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
             .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
         let w = img.width as u32;
         let h = img.height as u32;
-        tracing::debug!("clipboard image opened from image: {}x{}", w, h);
+        tracing::debug!("clipboard image opened from image: {w}x{h}");
 
         let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
             return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));

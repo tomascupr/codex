@@ -279,6 +279,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnAborted(_)
                     | EventMsg::ConversationHistory(_)
                     | EventMsg::UserMessage(_)
+                    | EventMsg::SubAgentStart(_)
+                    | EventMsg::SubAgentEnd(_)
                     | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that

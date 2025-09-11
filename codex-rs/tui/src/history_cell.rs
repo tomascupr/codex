@@ -1332,6 +1332,86 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     invocation_spans.into()
 }
 
+/// Helper function to format a sub-agent header line
+#[allow(dead_code)]
+pub(crate) fn format_subagent_header(name: &str) -> Line<'static> {
+    Line::from(vec!["↳ Sub-agent: ".dim(), name.to_string().bold()])
+}
+
+/// Helper function to indent sub-agent content
+#[allow(dead_code)]
+pub(crate) fn indent_subagent_content(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    prefix_lines(lines, "  ".into(), "  ".into())
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct SubAgentHistoryCell {
+    name: String,
+    content_lines: Vec<Line<'static>>,
+}
+
+#[allow(dead_code)]
+impl SubAgentHistoryCell {
+    pub(crate) fn new(name: String, content_lines: Vec<Line<'static>>) -> Self {
+        Self {
+            name,
+            content_lines,
+        }
+    }
+}
+
+impl HistoryCell for SubAgentHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        // Add the compact header line
+        lines.push(format_subagent_header(&self.name));
+
+        // Add indented nested content
+        lines.extend(indent_subagent_content(self.content_lines.clone()));
+
+        lines
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        lines.push(Line::from(vec![
+            "sub-agent ".cyan(),
+            self.name.clone().bold(),
+        ]));
+        lines.extend(self.content_lines.clone());
+        lines
+    }
+}
+
+/// Create a new sub-agent start event cell
+pub(crate) fn new_subagent_start_event(name: String, description: String) -> PlainHistoryCell {
+    let lines = vec![
+        Line::from(vec!["↳ Sub-agent started: ".dim(), name.bold()]),
+        Line::from(vec!["  ".into(), description.dim()]),
+    ];
+    PlainHistoryCell { lines }
+}
+
+/// Create a new sub-agent end event cell
+pub(crate) fn new_subagent_end_event(name: String, success: bool) -> PlainHistoryCell {
+    let status_text = if success { "completed" } else { "failed" };
+    let status_style = if success {
+        status_text.green()
+    } else {
+        status_text.red()
+    };
+
+    let lines = vec![Line::from(vec![
+        "↳ Sub-agent ".dim(),
+        status_style,
+        ": ".dim(),
+        name.bold(),
+    ])];
+    PlainHistoryCell { lines }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1896,5 +1976,165 @@ mod tests {
             summary_lines,
             vec!["codex", "Thinking", "We should fix the bug next."]
         )
+    }
+
+    #[test]
+    fn test_subagent_history_cell_creation() {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+
+        let content_lines = vec![
+            Line::from(Span::styled(
+                "Task completed successfully",
+                Style::default().fg(Color::Green),
+            )),
+            Line::from("Code review finished."),
+        ];
+
+        let cell = SubAgentHistoryCell::new("code-reviewer".to_string(), content_lines.clone());
+
+        assert_eq!(cell.name, "code-reviewer");
+        assert_eq!(cell.content_lines.len(), 2);
+    }
+
+    #[test]
+    fn test_subagent_history_cell_display_lines() {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+
+        let content_lines = vec![
+            Line::from("Sub-agent starting..."),
+            Line::from(Span::styled(
+                "Running code analysis",
+                Style::default().fg(Color::Blue),
+            )),
+            Line::from("Analysis complete."),
+        ];
+
+        let cell = SubAgentHistoryCell::new("analyzer".to_string(), content_lines);
+        let display_lines = cell.display_lines(80);
+
+        // The display should include a header with the sub-agent name plus the content
+        assert!(display_lines.len() >= 4); // Header + 3 content lines
+
+        // Check that sub-agent name appears in the first line
+        let first_line_text = display_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(first_line_text.contains("analyzer"));
+
+        // Verify content lines are included
+        let all_text = display_lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<String>();
+        assert!(all_text.contains("Sub-agent starting..."));
+        assert!(all_text.contains("Running code analysis"));
+        assert!(all_text.contains("Analysis complete."));
+    }
+
+    #[test]
+    fn test_subagent_history_cell_transcript_lines() {
+        use ratatui::text::Line;
+
+        let content_lines = vec![
+            Line::from("Processing task..."),
+            Line::from("Task completed."),
+        ];
+
+        let cell = SubAgentHistoryCell::new("helper".to_string(), content_lines);
+        let transcript_lines = cell.transcript_lines();
+
+        // Transcript should include the sub-agent identifier and content
+        let transcript_text = transcript_lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<String>>();
+
+        // Should have at least the header and content
+        assert!(transcript_text.len() >= 2);
+
+        // Should contain the sub-agent name and content
+        let full_transcript = transcript_text.join(" ");
+        assert!(full_transcript.contains("helper"));
+        assert!(full_transcript.contains("Processing task..."));
+        assert!(full_transcript.contains("Task completed."));
+    }
+
+    #[test]
+    fn test_subagent_history_cell_empty_content() {
+        let cell = SubAgentHistoryCell::new("empty-agent".to_string(), vec![]);
+        let display_lines = cell.display_lines(80);
+
+        // Should still show header even with empty content
+        assert!(!display_lines.is_empty());
+
+        let first_line_text = display_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(first_line_text.contains("empty-agent"));
+    }
+
+    #[test]
+    fn test_subagent_history_cell_with_long_name() {
+        use ratatui::text::Line;
+
+        let long_name = "very-long-sub-agent-name-that-might-need-wrapping";
+        let content_lines = vec![Line::from("Short content")];
+
+        let cell = SubAgentHistoryCell::new(long_name.to_string(), content_lines);
+        let display_lines = cell.display_lines(40); // Narrow width
+
+        // Should handle long names gracefully
+        assert!(!display_lines.is_empty());
+
+        let header_text = display_lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(header_text.contains("very-long-sub-agent"));
+    }
+
+    #[test]
+    fn test_subagent_history_cell_transcript_format() {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+
+        let content_lines = vec![
+            Line::from(vec![
+                Span::styled("Success: ", Style::default().fg(Color::Green)),
+                Span::raw("Task completed"),
+            ]),
+            Line::from("Next step: Continue with review"),
+        ];
+
+        let cell = SubAgentHistoryCell::new("reviewer".to_string(), content_lines);
+        let transcript_lines = cell.transcript_lines();
+
+        let rendered = render_transcript(&cell);
+
+        // Check that the transcript captures both the sub-agent identifier and content
+        assert!(rendered.len() >= 2);
+
+        // Should contain formatted content
+        let full_text = rendered.join(" ");
+        assert!(full_text.contains("reviewer"));
+        assert!(full_text.contains("Task completed"));
+        assert!(full_text.contains("Continue with review"));
     }
 }

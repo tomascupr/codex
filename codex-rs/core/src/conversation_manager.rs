@@ -225,6 +225,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            origin: None,
         }
     }
     fn assistant_msg(text: &str) -> ResponseItem {
@@ -234,6 +235,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            origin: None,
         }
     }
 
@@ -252,12 +254,14 @@ mod tests {
                 }],
                 content: None,
                 encrypted_content: None,
+                origin: None,
             },
             ResponseItem::FunctionCall {
                 id: None,
                 name: "tool".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                origin: None,
             },
             assistant_msg("a4"),
         ];

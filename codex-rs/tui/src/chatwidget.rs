@@ -27,6 +27,8 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentEndEvent;
+use codex_core::protocol::SubAgentStartEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -35,6 +37,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -47,6 +50,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use serde_json;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -785,7 +789,10 @@ impl ChatWidget {
                         }
                     }
                     InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
+                        self.dispatch_command(cmd, None);
+                    }
+                    InputResult::CommandWithArgs(cmd, args) => {
+                        self.dispatch_command(cmd, Some(args));
                     }
                     InputResult::None => {}
                 }
@@ -808,7 +815,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    fn dispatch_command(&mut self, cmd: SlashCommand, args: Option<String>) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -844,6 +851,52 @@ impl ChatWidget {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            SlashCommand::Agents => {
+                // Check if sub-agents are enabled
+                if self.config.include_subagent_tools {
+                    // Generate a direct function call to subagent_list
+                    self.submit_function_call("subagent_list", "{}");
+                } else {
+                    self.submit_text_message(
+                        "Sub-agents are not enabled in this session".to_string(),
+                    );
+                }
+            }
+            SlashCommand::Agent => {
+                // Check if sub-agents are enabled
+                if self.config.include_subagent_tools {
+                    if let Some(args) = args {
+                        // Parse the arguments: <name> <task>
+                        let parts: Vec<&str> = args.splitn(2, ' ').collect();
+                        if parts.len() >= 2 {
+                            let agent_name = parts[0].trim();
+                            let task = parts[1].trim();
+
+                            // Generate a direct function call to subagent_run with parameters
+                            let arguments = serde_json::json!({
+                                "name": agent_name,
+                                "task": task
+                            })
+                            .to_string();
+                            self.submit_function_call("subagent_run", &arguments);
+                        } else if parts.len() == 1 {
+                            let agent_name = parts[0].trim();
+                            self.submit_text_message(format!(
+                                "Please specify a task for the '{}' sub-agent. Usage: /agent {} <task>",
+                                agent_name, agent_name
+                            ));
+                        } else {
+                            self.submit_text_message("Usage: /agent <name> <task>. For example: /agent reviewer \"check this code for bugs\"".to_string());
+                        }
+                    } else {
+                        self.submit_text_message("Usage: /agent <name> <task>. For example: /agent reviewer \"check this code for bugs\"".to_string());
+                    }
+                } else {
+                    self.submit_text_message(
+                        "Sub-agents are not enabled in this session".to_string(),
+                    );
+                }
             }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
@@ -1027,13 +1080,16 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                self.on_agent_message(message)
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta, .. }) => {
                 self.on_agent_message_delta(delta)
             }
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta, .. })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
+                ..
             }) => self.on_agent_reasoning_delta(delta),
             EventMsg::AgentReasoning(AgentReasoningEvent { .. })
             | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { .. }) => {
@@ -1087,6 +1143,8 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
+            EventMsg::SubAgentStart(ev) => self.on_subagent_start(ev),
+            EventMsg::SubAgentEnd(ev) => self.on_subagent_end(ev),
         }
     }
 
@@ -1353,6 +1411,81 @@ impl ChatWidget {
         self.submit_user_message(text.into());
     }
 
+    /// Submit a direct function call request that bypasses normal user->model->function flow.
+    /// This generates a structured prompt that immediately triggers the specified function call.
+    pub(crate) fn submit_function_call(&mut self, name: &str, arguments: &str) {
+        use rand::Rng;
+
+        // Generate a unique call_id for this function call
+        let mut rng = rand::rng();
+        let call_id = format!("slash-{}", rng.random::<u32>());
+
+        // Add the slash command to conversation history as a user action
+        let command_display = if name == "subagent_list" {
+            "/agents".to_string()
+        } else if name == "subagent_run" {
+            let args: Result<serde_json::Value, _> = serde_json::from_str(arguments);
+            if let Ok(args_obj) = args {
+                format!(
+                    "/agent {} {}",
+                    args_obj.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                    args_obj.get("task").and_then(|v| v.as_str()).unwrap_or("")
+                )
+            } else {
+                "/agent".to_string()
+            }
+        } else {
+            format!("/{}", name)
+        };
+        self.add_to_history(history_cell::new_user_prompt(command_display));
+
+        // Create a ResponseItem::FunctionCall that represents the direct function invocation
+        let _function_call = ResponseItem::FunctionCall {
+            id: None,
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+            call_id: call_id.clone(),
+            origin: None,
+        };
+
+        // For direct execution, we need to create a structured input that the model will process
+        // The model will see this as a function call request and execute it directly
+        let structured_prompt = match name {
+            "subagent_list" => {
+                "Please execute the subagent_list function call to show all available sub-agents."
+                    .to_string()
+            }
+            "subagent_run" => {
+                let args: Result<serde_json::Value, _> = serde_json::from_str(arguments);
+                if let Ok(args_obj) = args {
+                    let agent_name = args_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let task = args_obj.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                    format!(
+                        "Please execute the subagent_run function call with name='{}' and task='{}'.",
+                        agent_name, task
+                    )
+                } else {
+                    "Please execute the subagent_run function call with the provided arguments."
+                        .to_string()
+                }
+            }
+            _ => format!("Please execute the {} function call.", name),
+        };
+
+        // Submit this as a user input that will cause the model to immediately call the function
+        let items = vec![InputItem::Text {
+            text: structured_prompt,
+        }];
+
+        if let Err(e) = self.codex_op_tx.send(Op::UserInput { items }) {
+            tracing::error!("failed to send function call request: {e}");
+            self.add_to_history(history_cell::new_error_event(format!(
+                "Failed to submit function call request: {}",
+                e
+            )));
+        }
+    }
+
     pub(crate) fn token_usage(&self) -> TokenUsage {
         self.token_info
             .as_ref()
@@ -1373,6 +1506,16 @@ impl ChatWidget {
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
         self.bottom_pane.set_token_usage(None);
+    }
+
+    fn on_subagent_start(&mut self, event: SubAgentStartEvent) {
+        let cell = history_cell::new_subagent_start_event(event.name, event.description);
+        self.add_to_history(cell);
+    }
+
+    fn on_subagent_end(&mut self, event: SubAgentEndEvent) {
+        let cell = history_cell::new_subagent_end_event(event.name, event.success);
+        self.add_to_history(cell);
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {

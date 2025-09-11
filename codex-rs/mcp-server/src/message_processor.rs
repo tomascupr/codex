@@ -578,7 +578,7 @@ impl MessageProcessor {
             match map_guard.get(&request_id) {
                 Some(id) => *id,
                 None => {
-                    tracing::warn!("Session not found for request_id: {}", request_id_string);
+                    tracing::warn!("Session not found for request_id: {request_id_string}");
                     return;
                 }
             }

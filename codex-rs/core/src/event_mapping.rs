@@ -19,7 +19,12 @@ pub(crate) fn map_response_item_to_event_messages(
     show_raw_agent_reasoning: bool,
 ) -> Vec<EventMsg> {
     match item {
-        ResponseItem::Message { role, content, .. } => {
+        ResponseItem::Message {
+            role,
+            content,
+            origin,
+            ..
+        } => {
             // Do not surface system messages as user events.
             if role == "system" {
                 return Vec::new();
@@ -31,6 +36,7 @@ pub(crate) fn map_response_item_to_event_messages(
                     ContentItem::OutputText { text } => {
                         Some(EventMsg::AgentMessage(AgentMessageEvent {
                             message: text.clone(),
+                            origin: origin.clone(),
                         }))
                     }
                     ContentItem::InputText { text } => {
@@ -54,12 +60,16 @@ pub(crate) fn map_response_item_to_event_messages(
         }
 
         ResponseItem::Reasoning {
-            summary, content, ..
+            summary,
+            content,
+            origin,
+            ..
         } => {
             let mut events = Vec::new();
             for ReasoningItemReasoningSummary::SummaryText { text } in summary {
                 events.push(EventMsg::AgentReasoning(AgentReasoningEvent {
                     text: text.clone(),
+                    origin: origin.clone(),
                 }));
             }
             if let Some(items) = content.as_ref().filter(|_| show_raw_agent_reasoning) {
@@ -69,7 +79,10 @@ pub(crate) fn map_response_item_to_event_messages(
                         | ReasoningItemContent::Text { text } => text,
                     };
                     events.push(EventMsg::AgentReasoningRawContent(
-                        AgentReasoningRawContentEvent { text: text.clone() },
+                        AgentReasoningRawContentEvent {
+                            text: text.clone(),
+                            origin: origin.clone(),
+                        },
                     ));
                 }
             }
@@ -86,6 +99,24 @@ pub(crate) fn map_response_item_to_event_messages(
             }
             WebSearchAction::Other => Vec::new(),
         },
+
+        ResponseItem::SubAgentStart {
+            name, description, ..
+        } => {
+            vec![EventMsg::SubAgentStart(
+                crate::protocol::SubAgentStartEvent {
+                    name: name.clone(),
+                    description: description.clone(),
+                },
+            )]
+        }
+
+        ResponseItem::SubAgentEnd { name, success, .. } => {
+            vec![EventMsg::SubAgentEnd(crate::protocol::SubAgentEndEvent {
+                name: name.clone(),
+                success: *success,
+            })]
+        }
 
         // Variants that require side effects are handled by higher layers and do not emit events here.
         ResponseItem::FunctionCall { .. }

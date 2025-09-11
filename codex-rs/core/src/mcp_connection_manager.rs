@@ -65,7 +65,7 @@ fn qualify_tools(tools: Vec<ToolInfo>) -> HashMap<String, ToolInfo> {
         }
 
         if used_names.contains(&qualified_name) {
-            warn!("skipping duplicated tool {}", qualified_name);
+            warn!("skipping duplicated tool {qualified_name}");
             continue;
         }
 

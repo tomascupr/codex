@@ -91,6 +91,7 @@ fn final_answer_without_newline_is_flushed_immediately() {
         id: "sub-a".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Hi! How can I help with codex-rs or anything else today?".into(),
+            origin: None,
         }),
     });
 
@@ -99,6 +100,7 @@ fn final_answer_without_newline_is_flushed_immediately() {
         id: "sub-a".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Hi! How can I help with codex-rs or anything else today?".into(),
+            origin: None,
         }),
     });
 
@@ -147,6 +149,7 @@ fn resumed_initial_messages_render_history() {
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
+                origin: None,
             }),
         ]),
         rollout_path: rollout_file.path().to_path_buf(),
@@ -608,7 +611,7 @@ fn disabled_slash_command_while_task_running_snapshot() {
     chat.bottom_pane.set_task_running(true);
 
     // Dispatch a command that is unavailable while a task runs (e.g., /model)
-    chat.dispatch_command(SlashCommand::Model);
+    chat.dispatch_command(SlashCommand::Model, None);
 
     // Drain history and snapshot the rendered error line(s)
     let cells = drain_insert_history(&mut rx);
@@ -973,6 +976,7 @@ fn ui_snapshots_small_heights_task_running() {
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Thinking**".into(),
+            origin: None,
         }),
     });
     for h in [1u16, 2, 3] {
@@ -1005,6 +1009,7 @@ fn status_widget_and_approval_modal_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Analyzing**".into(),
+            origin: None,
         }),
     });
 
@@ -1049,6 +1054,7 @@ fn status_widget_active_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Analyzing**".into(),
+            origin: None,
         }),
     });
     // Render and snapshot.
@@ -1510,6 +1516,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
+            origin: None,
         }),
     });
 
@@ -1518,6 +1525,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
+            origin: None,
         }),
     });
 
@@ -1556,12 +1564,14 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
         id: "s1".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "I will first analyze the request.".into(),
+            origin: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            origin: None,
         }),
     });
 
@@ -1583,24 +1593,28 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "I will ".into(),
+            origin: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "first analyze the ".into(),
+            origin: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "request.".into(),
+            origin: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "request.".into(),
+            origin: None,
         }),
     });
 
@@ -1609,12 +1623,14 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Here is the ".into(),
+            origin: None,
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "result.".into(),
+            origin: None,
         }),
     });
 
@@ -1622,6 +1638,7 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
         id: "s1".into(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
+            origin: None,
         }),
     });
 
@@ -1685,13 +1702,14 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         id: "t1".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "**Investigating rendering code**".into(),
+            origin: None,
         }),
     });
     chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I'm going to search the repo for where \"Change Approved\" is rendered to update that view.".into(), origin: None }),
     });
 
     // Dimensions

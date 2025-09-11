@@ -21,6 +21,8 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
+use codex_core::protocol::SubAgentEndEvent;
+use codex_core::protocol::SubAgentStartEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
@@ -199,7 +201,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     );
                 }
             }
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta, .. }) => {
                 if !self.answer_started {
                     ts_println!(self, "{}\n", "codex".style(self.italic).style(self.magenta));
                     self.answer_started = true;
@@ -208,7 +210,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
-            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
+            EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta, .. }) => {
                 if !self.show_agent_reasoning {
                     return CodexStatus::Running;
                 }
@@ -232,7 +234,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text, .. }) => {
                 if !self.show_raw_agent_reasoning {
                     return CodexStatus::Running;
                 }
@@ -247,6 +249,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
+                ..
             }) => {
                 if !self.show_raw_agent_reasoning {
                     return CodexStatus::Running;
@@ -258,7 +261,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
                 // if answer_started is false, this means we haven't received any
                 // delta. Thus, we need to print the message as a new answer.
                 if !self.answer_started {
@@ -561,6 +564,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationHistory(_) => {}
             EventMsg::UserMessage(_) => {}
+            EventMsg::SubAgentStart(SubAgentStartEvent { name, .. }) => {
+                println!("Starting sub-agent: {name}");
+            }
+            EventMsg::SubAgentEnd(SubAgentEndEvent { name, success, .. }) => {
+                let status = if success { "completed" } else { "failed" };
+                println!("Sub-agent {status}: {name}");
+            }
         }
         CodexStatus::Running
     }

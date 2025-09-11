@@ -109,6 +109,7 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        origin: None,
     }
 }
 
@@ -119,6 +120,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        origin: None,
     }
 }
 
@@ -130,6 +132,7 @@ fn reasoning_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }]),
         encrypted_content: None,
+        origin: None,
     }
 }
 
@@ -139,6 +142,7 @@ fn function_call() -> ResponseItem {
         name: "f".to_string(),
         arguments: "{}".to_string(),
         call_id: "c1".to_string(),
+        origin: None,
     }
 }
 
@@ -154,6 +158,7 @@ fn local_shell_call() -> ResponseItem {
             env: None,
             user: None,
         }),
+        origin: None,
     }
 }
 

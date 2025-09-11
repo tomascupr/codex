@@ -55,6 +55,7 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
+    CommandWithArgs(SlashCommand, String),
     None,
 }
 
@@ -816,6 +817,27 @@ impl ChatComposer {
                 if !text.is_empty() {
                     self.history.record_local_submission(&text);
                 }
+
+                // Check if this is a slash command with arguments
+                if text.starts_with('/') && !has_attachments {
+                    let parts: Vec<&str> = text.splitn(2, ' ').collect();
+                    if parts.len() >= 1 {
+                        let command_str = &parts[0][1..]; // Remove the leading '/'
+                        if let Ok(cmd) = command_str.parse::<SlashCommand>() {
+                            if cmd == SlashCommand::Agent && parts.len() > 1 {
+                                // For /agent command with arguments, return CommandWithArgs
+                                return (
+                                    InputResult::CommandWithArgs(cmd, parts[1].to_string()),
+                                    true,
+                                );
+                            } else {
+                                // For other commands or /agent without args, return regular Command
+                                return (InputResult::Command(cmd), true);
+                            }
+                        }
+                    }
+                }
+
                 // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
                 (InputResult::Submitted(text), true)
             }
@@ -1780,6 +1802,9 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected simple Command result for '/init', not CommandWithArgs")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
     }
@@ -1838,6 +1863,9 @@ mod tests {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
+            InputResult::CommandWithArgs(_, _) => {
+                panic!("expected simple Command result for '/mention', not CommandWithArgs")
+            }
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");

@@ -36,7 +36,7 @@ pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
         }
         Err(err) => {
             // Not fatal; higher layers may still proceed and surface errors later.
-            tracing::warn!("Failed to query local models from Ollama: {}.", err);
+            tracing::warn!("Failed to query local models from Ollama: {err}.");
         }
     }
 

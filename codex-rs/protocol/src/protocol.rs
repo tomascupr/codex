@@ -35,6 +35,16 @@ pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+/// Tracks the origin of content - whether it comes from the main agent or a sub-agent
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// Content from the main agent
+    Main,
+    /// Content from a sub-agent with the specified name
+    SubAgent { name: String },
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Submission {
@@ -496,6 +506,12 @@ pub enum EventMsg {
 
     TurnAborted(TurnAbortedEvent),
 
+    /// Sub-agent has started execution
+    SubAgentStart(SubAgentStartEvent),
+
+    /// Sub-agent has completed execution
+    SubAgentEnd(SubAgentEndEvent),
+
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
@@ -677,6 +693,9 @@ impl fmt::Display for FinalOutput {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentMessageEvent {
     pub message: String,
+    /// Origin of this message (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -723,21 +742,33 @@ where
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
+    /// Origin of this message delta (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
+    /// Origin of this reasoning (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningRawContentEvent {
     pub text: String,
+    /// Origin of this raw reasoning content (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningRawContentDeltaEvent {
     pub delta: String,
+    /// Origin of this raw reasoning content delta (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -746,6 +777,9 @@ pub struct AgentReasoningSectionBreakEvent {}
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningDeltaEvent {
     pub delta: String,
+    /// Origin of this reasoning delta (main agent or sub-agent)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1019,6 +1053,24 @@ pub enum TurnAbortReason {
     Replaced,
 }
 
+/// Event emitted when a sub-agent starts execution
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct SubAgentStartEvent {
+    /// Name of the sub-agent
+    pub name: String,
+    /// Description of what the sub-agent will do
+    pub description: String,
+}
+
+/// Event emitted when a sub-agent completes execution
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct SubAgentEndEvent {
+    /// Name of the sub-agent that completed
+    pub name: String,
+    /// Whether the sub-agent execution was successful
+    pub success: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,5 +1124,285 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, event);
+    }
+
+    #[test]
+    fn test_origin_serialization() {
+        // Test Main origin
+        let origin_main = Origin::Main;
+        let serialized = serde_json::to_string(&origin_main).unwrap();
+        assert_eq!(serialized, r#""main""#);
+        let deserialized: Origin = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, Origin::Main);
+
+        // Test SubAgent origin
+        let origin_sub = Origin::SubAgent {
+            name: "test-agent".to_string(),
+        };
+        let serialized = serde_json::to_string(&origin_sub).unwrap();
+        assert_eq!(serialized, r#"{"sub_agent":{"name":"test-agent"}}"#);
+        let deserialized: Origin = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            deserialized,
+            Origin::SubAgent {
+                name: "test-agent".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_subagent_start_event_serialization() {
+        let event = SubAgentStartEvent {
+            name: "code-reviewer".to_string(),
+            description: "Reviews code for quality and best practices".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(serialized.contains("code-reviewer"));
+        assert!(serialized.contains("Reviews code"));
+
+        let deserialized: SubAgentStartEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "code-reviewer");
+        assert_eq!(
+            deserialized.description,
+            "Reviews code for quality and best practices"
+        );
+    }
+
+    #[test]
+    fn test_subagent_end_event_serialization() {
+        let event = SubAgentEndEvent {
+            name: "code-reviewer".to_string(),
+            success: true,
+        };
+
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(serialized.contains("code-reviewer"));
+        assert!(serialized.contains("true"));
+
+        let deserialized: SubAgentEndEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "code-reviewer");
+        assert!(deserialized.success);
+
+        // Test failure case
+        let event_fail = SubAgentEndEvent {
+            name: "test-agent".to_string(),
+            success: false,
+        };
+
+        let serialized = serde_json::to_string(&event_fail).unwrap();
+        let deserialized: SubAgentEndEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "test-agent");
+        assert!(!deserialized.success);
+    }
+
+    #[test]
+    fn test_agent_message_event_with_origin() {
+        // Test without origin (default behavior)
+        let event_no_origin = AgentMessageEvent {
+            message: "Hello from main agent".to_string(),
+            origin: None,
+        };
+
+        let serialized = serde_json::to_string(&event_no_origin).unwrap();
+        assert!(serialized.contains("Hello from main agent"));
+        assert!(!serialized.contains("origin")); // Should be omitted when None
+
+        let deserialized: AgentMessageEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.message, "Hello from main agent");
+        assert_eq!(deserialized.origin, None);
+
+        // Test with main origin
+        let event_main = AgentMessageEvent {
+            message: "Hello from main agent".to_string(),
+            origin: Some(Origin::Main),
+        };
+
+        let serialized = serde_json::to_string(&event_main).unwrap();
+        assert!(serialized.contains("Hello from main agent"));
+        assert!(serialized.contains("main"));
+
+        let deserialized: AgentMessageEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.message, "Hello from main agent");
+        assert_eq!(deserialized.origin, Some(Origin::Main));
+
+        // Test with sub-agent origin
+        let event_sub = AgentMessageEvent {
+            message: "Hello from sub-agent".to_string(),
+            origin: Some(Origin::SubAgent {
+                name: "helper-agent".to_string(),
+            }),
+        };
+
+        let serialized = serde_json::to_string(&event_sub).unwrap();
+        assert!(serialized.contains("Hello from sub-agent"));
+        assert!(serialized.contains("helper-agent"));
+
+        let deserialized: AgentMessageEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.message, "Hello from sub-agent");
+        assert_eq!(
+            deserialized.origin,
+            Some(Origin::SubAgent {
+                name: "helper-agent".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_agent_message_delta_event_with_origin() {
+        let event = AgentMessageDeltaEvent {
+            delta: "Incremental text".to_string(),
+            origin: Some(Origin::SubAgent {
+                name: "streaming-agent".to_string(),
+            }),
+        };
+
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(serialized.contains("Incremental text"));
+        assert!(serialized.contains("streaming-agent"));
+
+        let deserialized: AgentMessageDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.delta, "Incremental text");
+        assert_eq!(
+            deserialized.origin,
+            Some(Origin::SubAgent {
+                name: "streaming-agent".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_agent_reasoning_events_with_origin() {
+        // Test AgentReasoningEvent
+        let reasoning_event = AgentReasoningEvent {
+            text: "Let me think about this problem...".to_string(),
+            origin: Some(Origin::SubAgent {
+                name: "reasoning-agent".to_string(),
+            }),
+        };
+
+        let serialized = serde_json::to_string(&reasoning_event).unwrap();
+        let deserialized: AgentReasoningEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.text, "Let me think about this problem...");
+        assert_eq!(
+            deserialized.origin,
+            Some(Origin::SubAgent {
+                name: "reasoning-agent".to_string(),
+            })
+        );
+
+        // Test AgentReasoningDeltaEvent
+        let reasoning_delta_event = AgentReasoningDeltaEvent {
+            delta: "step by step...".to_string(),
+            origin: Some(Origin::Main),
+        };
+
+        let serialized = serde_json::to_string(&reasoning_delta_event).unwrap();
+        let deserialized: AgentReasoningDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.delta, "step by step...");
+        assert_eq!(deserialized.origin, Some(Origin::Main));
+
+        // Test AgentReasoningRawContentEvent
+        let raw_content_event = AgentReasoningRawContentEvent {
+            text: "Raw reasoning content".to_string(),
+            origin: None,
+        };
+
+        let serialized = serde_json::to_string(&raw_content_event).unwrap();
+        let deserialized: AgentReasoningRawContentEvent =
+            serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.text, "Raw reasoning content");
+        assert_eq!(deserialized.origin, None);
+
+        // Test AgentReasoningRawContentDeltaEvent
+        let raw_delta_event = AgentReasoningRawContentDeltaEvent {
+            delta: "delta content".to_string(),
+            origin: Some(Origin::SubAgent {
+                name: "delta-agent".to_string(),
+            }),
+        };
+
+        let serialized = serde_json::to_string(&raw_delta_event).unwrap();
+        let deserialized: AgentReasoningRawContentDeltaEvent =
+            serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.delta, "delta content");
+        assert_eq!(
+            deserialized.origin,
+            Some(Origin::SubAgent {
+                name: "delta-agent".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_event_msg_subagent_variants() {
+        // Test SubAgentStart event
+        let start_event = Event {
+            id: "test-123".to_string(),
+            msg: EventMsg::SubAgentStart(SubAgentStartEvent {
+                name: "test-agent".to_string(),
+                description: "Test agent description".to_string(),
+            }),
+        };
+
+        let serialized = serde_json::to_string(&start_event).unwrap();
+        assert!(serialized.contains("sub_agent_start"));
+        assert!(serialized.contains("test-agent"));
+        assert!(serialized.contains("Test agent description"));
+
+        let deserialized: Event = serde_json::from_str(&serialized).unwrap();
+        if let EventMsg::SubAgentStart(event) = deserialized.msg {
+            assert_eq!(event.name, "test-agent");
+            assert_eq!(event.description, "Test agent description");
+        } else {
+            panic!("Expected SubAgentStart event");
+        }
+
+        // Test SubAgentEnd event
+        let end_event = Event {
+            id: "test-456".to_string(),
+            msg: EventMsg::SubAgentEnd(SubAgentEndEvent {
+                name: "test-agent".to_string(),
+                success: false,
+            }),
+        };
+
+        let serialized = serde_json::to_string(&end_event).unwrap();
+        assert!(serialized.contains("sub_agent_end"));
+        assert!(serialized.contains("test-agent"));
+        assert!(serialized.contains("false"));
+
+        let deserialized: Event = serde_json::from_str(&serialized).unwrap();
+        if let EventMsg::SubAgentEnd(event) = deserialized.msg {
+            assert_eq!(event.name, "test-agent");
+            assert!(!event.success);
+        } else {
+            panic!("Expected SubAgentEnd event");
+        }
+    }
+
+    #[test]
+    fn test_origin_equality_and_clone() {
+        let origin1 = Origin::Main;
+        let origin2 = Origin::Main;
+        let origin3 = Origin::SubAgent {
+            name: "agent1".to_string(),
+        };
+        let origin4 = Origin::SubAgent {
+            name: "agent1".to_string(),
+        };
+        let origin5 = Origin::SubAgent {
+            name: "agent2".to_string(),
+        };
+
+        // Test equality
+        assert_eq!(origin1, origin2);
+        assert_eq!(origin3, origin4);
+        assert_ne!(origin1, origin3);
+        assert_ne!(origin3, origin5);
+
+        // Test clone
+        let cloned = origin3.clone();
+        assert_eq!(origin3, cloned);
     }
 }

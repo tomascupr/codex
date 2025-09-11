@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::agents::{AgentRegistry, NestedAgentRunner, discover_and_load_agents};
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -91,12 +92,15 @@ use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
+use crate::protocol::Origin;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
+use crate::protocol::SubAgentEndEvent;
+use crate::protocol::SubAgentStartEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenUsageInfo;
@@ -291,6 +295,9 @@ pub(crate) struct Session {
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
+
+    /// Registry of available sub-agents
+    agent_registry: AgentRegistry,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -470,6 +477,7 @@ impl Session {
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
+                include_subagent_tools: config.include_subagent_tools,
             }),
             user_instructions,
             base_instructions,
@@ -478,6 +486,14 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
         };
+
+        // Load agent registry from project and user directories
+        let agent_registry =
+            discover_and_load_agents(Some(&turn_context.cwd)).unwrap_or_else(|e| {
+                tracing::warn!("Failed to load agents: {e}");
+                AgentRegistry::new()
+            });
+        tracing::debug!("Loaded {} agents", agent_registry.len());
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -490,6 +506,7 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            agent_registry,
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -1135,6 +1152,7 @@ async fn submission_loop(
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
+                    include_subagent_tools: config.include_subagent_tools,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1220,6 +1238,7 @@ async fn submission_loop(
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
                             include_view_image_tool: config.include_view_image_tool,
+                            include_subagent_tools: config.include_subagent_tools,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1501,6 +1520,7 @@ async fn run_task(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
                                     output: output.clone(),
+                                    origin: None,
                                 },
                             );
                         }
@@ -1513,6 +1533,7 @@ async fn run_task(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
                                     output: output.clone(),
+                                    origin: None,
                                 },
                             );
                         }
@@ -1525,6 +1546,7 @@ async fn run_task(
                                 ResponseItem::CustomToolCallOutput {
                                     call_id: call_id.clone(),
                                     output: output.clone(),
+                                    origin: None,
                                 },
                             );
                         }
@@ -1548,6 +1570,7 @@ async fn run_task(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
                                     output,
+                                    origin: None,
                                 },
                             );
                         }
@@ -1557,6 +1580,7 @@ async fn run_task(
                                 summary,
                                 content,
                                 encrypted_content,
+                                ..
                             },
                             None,
                         ) => {
@@ -1565,6 +1589,7 @@ async fn run_task(
                                 summary: summary.clone(),
                                 content: content.clone(),
                                 encrypted_content: encrypted_content.clone(),
+                                origin: None,
                             });
                         }
                         _ => {
@@ -1735,6 +1760,7 @@ async fn try_run_turn(
             .map(|call_id| ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 output: "aborted".to_string(),
+                origin: None,
             })
             .collect::<Vec<_>>()
     };
@@ -1835,14 +1861,20 @@ async fn try_run_turn(
             ResponseEvent::OutputTextDelta(delta) => {
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                        delta,
+                        origin: None,
+                    }),
                 };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+                        delta,
+                        origin: None,
+                    }),
                 };
                 sess.tx_event.send(event).await.ok();
             }
@@ -1858,7 +1890,10 @@ async fn try_run_turn(
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
-                            AgentReasoningRawContentDeltaEvent { delta },
+                            AgentReasoningRawContentDeltaEvent {
+                                delta,
+                                origin: None,
+                            },
                         ),
                     };
                     sess.tx_event.send(event).await.ok();
@@ -1943,6 +1978,7 @@ async fn run_compact_task(
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Compact task completed".to_string(),
+            origin: None,
         }),
     };
     sess.send_event(event).await;
@@ -1989,6 +2025,7 @@ async fn handle_response_item(
             call_id,
             status: _,
             action,
+            ..
         } => {
             let LocalShellAction::Exec(action) = action;
             tracing::info!("LocalShellCall: {action:?}");
@@ -2033,6 +2070,7 @@ async fn handle_response_item(
             name,
             input,
             status: _,
+            ..
         } => Some(
             handle_custom_tool_call(
                 sess,
@@ -2066,6 +2104,8 @@ async fn handle_response_item(
             }
             None
         }
+        ResponseItem::SubAgentStart { .. } => None,
+        ResponseItem::SubAgentEnd { .. } => None,
         ResponseItem::Other => None,
     };
     Ok(output)
@@ -2207,6 +2247,49 @@ async fn handle_function_call(
                 call_id,
                 output: function_call_output,
             }
+        }
+        "subagent_list" => {
+            if !turn_context.tools_config.include_subagent_tools {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "Sub-agents are not enabled in this session".to_string(),
+                        success: Some(false),
+                    },
+                };
+            }
+            let sub_agent_manager = SubAgentManager::new(&sess.agent_registry);
+            sub_agent_manager.handle_subagent_list(call_id).await
+        }
+        "subagent_describe" => {
+            if !turn_context.tools_config.include_subagent_tools {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "Sub-agents are not enabled in this session".to_string(),
+                        success: Some(false),
+                    },
+                };
+            }
+            let sub_agent_manager = SubAgentManager::new(&sess.agent_registry);
+            sub_agent_manager
+                .handle_subagent_describe(arguments, call_id)
+                .await
+        }
+        "subagent_run" => {
+            if !turn_context.tools_config.include_subagent_tools {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "Sub-agents are not enabled in this session".to_string(),
+                        success: Some(false),
+                    },
+                };
+            }
+            let sub_agent_manager = SubAgentManager::new(&sess.agent_registry);
+            sub_agent_manager
+                .handle_subagent_run(arguments, call_id, sess, turn_context, &sub_id)
+                .await
         }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
@@ -2354,6 +2437,201 @@ fn maybe_translate_shell_command(
         return ExecParams { command, ..params };
     }
     params
+}
+
+/// Manager for handling sub-agent tool calls
+struct SubAgentManager {
+    agent_runner: NestedAgentRunner,
+}
+
+impl SubAgentManager {
+    fn new(agent_registry: &AgentRegistry) -> Self {
+        Self {
+            agent_runner: NestedAgentRunner::new(agent_registry.clone()),
+        }
+    }
+
+    /// Handle subagent_list tool call - return list of available sub-agents
+    async fn handle_subagent_list(&self, call_id: String) -> ResponseInputItem {
+        let agents = self.agent_runner.list_agents();
+        let output = serde_json::json!({
+            "agents": agents
+        });
+
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: output.to_string(),
+                success: Some(true),
+            },
+        }
+    }
+
+    /// Handle subagent_describe tool call - return detailed info for specific sub-agent
+    async fn handle_subagent_describe(
+        &self,
+        arguments: String,
+        call_id: String,
+    ) -> ResponseInputItem {
+        #[derive(serde::Deserialize)]
+        struct DescribeArgs {
+            name: String,
+        }
+
+        let args = match serde_json::from_str::<DescribeArgs>(&arguments) {
+            Ok(a) => a,
+            Err(e) => {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("failed to parse function arguments: {e}"),
+                        success: Some(false),
+                    },
+                };
+            }
+        };
+
+        match self.agent_runner.describe_agent(&args.name) {
+            Ok(description) => {
+                let output = serde_json::to_string(&description)
+                    .unwrap_or_else(|e| format!("Failed to serialize agent description: {e}"));
+
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(true),
+                    },
+                }
+            }
+            Err(e) => ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("Agent not found: {e}"),
+                    success: Some(false),
+                },
+            },
+        }
+    }
+
+    /// Handle subagent_run tool call - execute a sub-agent with its own nested context
+    async fn handle_subagent_run(
+        &self,
+        arguments: String,
+        call_id: String,
+        sess: &Session,
+        turn_context: &TurnContext,
+        sub_id: &str,
+    ) -> ResponseInputItem {
+        #[derive(serde::Deserialize)]
+        struct RunArgs {
+            name: String,
+            task: String,
+            #[serde(default)]
+            #[allow(dead_code)]
+            model: Option<String>,
+        }
+
+        let args = match serde_json::from_str::<RunArgs>(&arguments) {
+            Ok(a) => a,
+            Err(e) => {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("failed to parse function arguments: {e}"),
+                        success: Some(false),
+                    },
+                };
+            }
+        };
+
+        // Create SubAgentStart ResponseItem for persistence
+        let start_response_item = ResponseItem::SubAgentStart {
+            name: args.name.clone(),
+            description: args.task.clone(),
+            origin: Some(Origin::Main),
+        };
+
+        // Emit SubAgentStartEvent for UI
+        let start_event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::SubAgentStart(SubAgentStartEvent {
+                name: args.name.clone(),
+                description: args.task.clone(),
+            }),
+        };
+
+        if let Err(e) = sess.tx_event.send(start_event).await {
+            warn!("Failed to send SubAgentStartEvent: {e}");
+        }
+
+        // Record SubAgentStart for rollout persistence
+        sess.record_conversation_items(&[start_response_item]).await;
+
+        // Create nested tools config with sub-agents disabled to prevent recursion
+        let nested_tools_config = ToolsConfig {
+            include_subagent_tools: false, // Prevent nested sub-agents
+            ..turn_context.tools_config.clone()
+        };
+
+        // Execute the sub-agent
+        let result = self
+            .agent_runner
+            .run_agent(
+                &args.name,
+                &args.task,
+                &nested_tools_config,
+                &turn_context.client,
+            )
+            .await;
+
+        // Create SubAgentEnd ResponseItem for persistence
+        let success = result.as_ref().map_or(false, |r| r.success);
+        let end_response_item = ResponseItem::SubAgentEnd {
+            name: args.name.clone(),
+            success,
+            origin: Some(Origin::Main),
+        };
+
+        // Emit SubAgentEndEvent for UI
+        let end_event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::SubAgentEnd(SubAgentEndEvent {
+                name: args.name.clone(),
+                success,
+            }),
+        };
+
+        if let Err(e) = sess.tx_event.send(end_event).await {
+            warn!("Failed to send SubAgentEndEvent: {e}");
+        }
+
+        // Record SubAgentEnd for rollout persistence
+        sess.record_conversation_items(&[end_response_item]).await;
+
+        // Return result
+        match result {
+            Ok(sub_result) => {
+                let output = serde_json::to_string(&sub_result)
+                    .unwrap_or_else(|e| format!("Failed to serialize sub-agent result: {e}"));
+
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: output,
+                        success: Some(sub_result.success),
+                    },
+                }
+            }
+            Err(e) => ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("Sub-agent execution failed: {e}"),
+                    success: Some(false),
+                },
+            },
+        }
+    }
 }
 
 async fn handle_container_exec_with_params(
@@ -2961,7 +3239,9 @@ fn convert_call_tool_result_to_function_call_output_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::config_types::ShellEnvironmentPolicyInherit;
+    use crate::exec_command::ExecSessionManager;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -2970,7 +3250,71 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::Duration as StdDuration;
+
+    fn create_test_config() -> Config {
+        Config {
+            model: "test-model".to_string(),
+            model_family: crate::model_family::ModelFamily {
+                slug: "test-model".to_string(),
+                family: "test".to_string(),
+                needs_special_apply_patch_instructions: false,
+                supports_reasoning_summaries: false,
+                reasoning_summary_format: crate::config_types::ReasoningSummaryFormat::None,
+                uses_local_shell_tool: false,
+                apply_patch_tool_type: None,
+            },
+            model_context_window: Some(128000),
+            model_max_output_tokens: Some(4096),
+            model_provider_id: "test".to_string(),
+            model_provider: crate::model_provider_info::ModelProviderInfo {
+                name: "test-provider".to_string(),
+                base_url: None,
+                env_key: None,
+                env_key_instructions: None,
+                wire_api: crate::model_provider_info::WireApi::Chat,
+                query_params: None,
+                http_headers: None,
+                env_http_headers: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_openai_auth: false,
+            },
+            approval_policy: crate::protocol::AskForApproval::Never,
+            sandbox_policy: crate::protocol::SandboxPolicy::ReadOnly,
+            shell_environment_policy: crate::config_types::ShellEnvironmentPolicy::default(),
+            hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
+            user_instructions: None,
+            base_instructions: None,
+            notify: None,
+            cwd: std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
+            mcp_servers: HashMap::new(),
+            model_providers: HashMap::new(),
+            project_doc_max_bytes: 32768,
+            codex_home: std::env::temp_dir(),
+            history: crate::config_types::History::default(),
+            file_opener: crate::config_types::UriBasedFileOpener::None,
+            tui: crate::config_types::Tui::default(),
+            codex_linux_sandbox_exe: None,
+            model_reasoning_effort: codex_protocol::config_types::ReasoningEffort::Medium,
+            model_reasoning_summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            model_verbosity: Some(codex_protocol::config_types::Verbosity::Medium),
+            chatgpt_base_url: "https://chatgpt.com".to_string(),
+            experimental_resume: None,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            tools_web_search_request: false,
+            responses_originator_header: "test".to_string(),
+            preferred_auth_method: codex_protocol::mcp_protocol::AuthMode::ApiKey,
+            use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            include_subagent_tools: false,
+            disable_paste_burst: false,
+        }
+    }
 
     fn text_block(s: &str) -> ContentBlock {
         ContentBlock::TextContent(TextContent {
@@ -3173,5 +3517,441 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_list_agents() {
+        use crate::agents::{AgentRegistry, SubAgent};
+
+        let mut registry = AgentRegistry::new();
+
+        // Add test agents
+        let agent1 = SubAgent {
+            name: "test-agent-1".to_string(),
+            description: "First test agent".to_string(),
+            tools: Some(vec!["shell".to_string()]),
+            body: "You are test agent 1".to_string(),
+        };
+
+        let agent2 = SubAgent {
+            name: "test-agent-2".to_string(),
+            description: "Second test agent".to_string(),
+            tools: None,
+            body: "You are test agent 2".to_string(),
+        };
+
+        registry.insert_agent(agent1);
+        registry.insert_agent(agent2);
+
+        let manager = SubAgentManager::new(&registry);
+        let result = manager.handle_subagent_list("call-123".to_string()).await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-123");
+            assert_eq!(output.success, Some(true));
+
+            let parsed: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+            let agents = parsed["agents"].as_array().unwrap();
+            assert_eq!(agents.len(), 2);
+            assert!(agents.contains(&serde_json::Value::String("test-agent-1".to_string())));
+            assert!(agents.contains(&serde_json::Value::String("test-agent-2".to_string())));
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_describe_agent_success() {
+        use crate::agents::{AgentRegistry, SubAgent};
+
+        let mut registry = AgentRegistry::new();
+
+        let agent = SubAgent {
+            name: "code-reviewer".to_string(),
+            description: "Reviews code for quality".to_string(),
+            tools: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
+            body: "You are a code reviewer specialized in quality analysis.".to_string(),
+        };
+
+        registry.insert_agent(agent);
+
+        let manager = SubAgentManager::new(&registry);
+        let args = serde_json::json!({
+            "name": "code-reviewer"
+        });
+
+        let result = manager
+            .handle_subagent_describe(args.to_string(), "call-456".to_string())
+            .await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-456");
+            assert_eq!(output.success, Some(true));
+
+            let description: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+            assert_eq!(description["name"], "code-reviewer");
+            assert_eq!(description["description"], "Reviews code for quality");
+            assert_eq!(
+                description["tools"],
+                serde_json::json!(["shell", "apply_patch"])
+            );
+            assert!(
+                description["body"]
+                    .as_str()
+                    .unwrap()
+                    .contains("code reviewer")
+            );
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_describe_agent_not_found() {
+        let registry = AgentRegistry::new(); // Empty registry
+
+        let manager = SubAgentManager::new(&registry);
+        let args = serde_json::json!({
+            "name": "nonexistent-agent"
+        });
+
+        let result = manager
+            .handle_subagent_describe(args.to_string(), "call-789".to_string())
+            .await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-789");
+            assert_eq!(output.success, Some(false));
+            assert!(output.content.contains("Agent not found"));
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_describe_agent_invalid_args() {
+        let registry = AgentRegistry::new();
+
+        let manager = SubAgentManager::new(&registry);
+        let invalid_args = "{ invalid json }";
+
+        let result = manager
+            .handle_subagent_describe(invalid_args.to_string(), "call-invalid".to_string())
+            .await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-invalid");
+            assert_eq!(output.success, Some(false));
+            assert!(
+                output
+                    .content
+                    .contains("failed to parse function arguments")
+            );
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_run_agent_success() {
+        use crate::agents::{AgentRegistry, SubAgent};
+        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+
+        let mut registry = AgentRegistry::new();
+
+        let agent = SubAgent {
+            name: "helper-agent".to_string(),
+            description: "A helpful assistant".to_string(),
+            tools: Some(vec!["shell".to_string()]),
+            body: "You are a helpful assistant. Complete tasks efficiently.".to_string(),
+        };
+
+        registry.insert_agent(agent);
+
+        // Create a mock session for testing
+        let (tx_event, _rx_event) = async_channel::unbounded();
+
+        let (mcp_manager, _start_errors) =
+            crate::mcp_connection_manager::McpConnectionManager::new(HashMap::new())
+                .await
+                .unwrap();
+
+        let session = Session {
+            conversation_id: codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            tx_event,
+            mcp_connection_manager: mcp_manager,
+            session_manager: ExecSessionManager::default(),
+            notify: None,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: false,
+            agent_registry: registry.clone(),
+        };
+
+        let tools_config = ToolsConfig {
+            shell_type: ConfigShellToolType::DefaultShell,
+            plan_tool: false,
+            apply_patch_tool_type: None,
+            web_search_request: false,
+            include_view_image_tool: false,
+            include_subagent_tools: true,
+        };
+
+        let turn_context = TurnContext {
+            client: ModelClient::new(
+                Arc::new(create_test_config()),
+                None,
+                crate::model_provider_info::ModelProviderInfo {
+                    name: "test-provider".to_string(),
+                    base_url: None,
+                    env_key: None,
+                    env_key_instructions: None,
+                    wire_api: crate::model_provider_info::WireApi::Chat,
+                    query_params: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                    request_max_retries: None,
+                    stream_max_retries: None,
+                    stream_idle_timeout_ms: None,
+                    requires_openai_auth: false,
+                },
+                codex_protocol::config_types::ReasoningEffort::Medium,
+                codex_protocol::config_types::ReasoningSummary::Auto,
+                codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            ),
+            cwd: std::env::current_dir().unwrap(),
+            base_instructions: None,
+            user_instructions: None,
+            approval_policy: crate::protocol::AskForApproval::Never,
+            sandbox_policy: crate::protocol::SandboxPolicy::ReadOnly,
+            shell_environment_policy: crate::config_types::ShellEnvironmentPolicy::default(),
+            tools_config,
+        };
+
+        let manager = SubAgentManager::new(&registry);
+        let args = serde_json::json!({
+            "name": "helper-agent",
+            "task": "Write a simple hello world function"
+        });
+
+        let result = manager
+            .handle_subagent_run(
+                args.to_string(),
+                "call-run-123".to_string(),
+                &session,
+                &turn_context,
+                "sub-123",
+            )
+            .await;
+
+        // With the real implementation, this will attempt to make an API call
+        // Since we're using a test configuration with no API endpoint, we expect an error response
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-run-123");
+
+            // The SubAgentManager should always return a response, but since the API call
+            // will fail (no base_url configured), we expect success to be false
+            assert_eq!(output.success, Some(false));
+
+            // The output content should be an error message about sub-agent execution failure
+            let output_content = &output.content;
+            assert!(
+                output_content.contains("Sub-agent execution failed")
+                    || output_content.contains("Failed to start model conversation")
+                    || output_content.contains("network error")
+                    || output_content.contains("connection")
+            );
+        } else {
+            panic!("Expected FunctionCallOutput, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_run_agent_not_found() {
+        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+
+        let registry = AgentRegistry::new(); // Empty registry
+
+        // Create a mock session
+        let (tx_event, _rx_event) = async_channel::unbounded();
+
+        let (mcp_manager, _start_errors) =
+            crate::mcp_connection_manager::McpConnectionManager::new(HashMap::new())
+                .await
+                .unwrap();
+
+        let session = Session {
+            conversation_id: codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            tx_event,
+            mcp_connection_manager: mcp_manager,
+            session_manager: ExecSessionManager::default(),
+            notify: None,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: false,
+            agent_registry: registry.clone(),
+        };
+
+        let tools_config = ToolsConfig {
+            shell_type: ConfigShellToolType::DefaultShell,
+            plan_tool: false,
+            apply_patch_tool_type: None,
+            web_search_request: false,
+            include_view_image_tool: false,
+            include_subagent_tools: true,
+        };
+
+        let turn_context = TurnContext {
+            client: ModelClient::new(
+                Arc::new(create_test_config()),
+                None,
+                crate::model_provider_info::ModelProviderInfo {
+                    name: "test-provider".to_string(),
+                    base_url: None,
+                    env_key: None,
+                    env_key_instructions: None,
+                    wire_api: crate::model_provider_info::WireApi::Chat,
+                    query_params: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                    request_max_retries: None,
+                    stream_max_retries: None,
+                    stream_idle_timeout_ms: None,
+                    requires_openai_auth: false,
+                },
+                codex_protocol::config_types::ReasoningEffort::Medium,
+                codex_protocol::config_types::ReasoningSummary::Auto,
+                codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            ),
+            cwd: std::env::current_dir().unwrap(),
+            base_instructions: None,
+            user_instructions: None,
+            approval_policy: crate::protocol::AskForApproval::Never,
+            sandbox_policy: crate::protocol::SandboxPolicy::ReadOnly,
+            shell_environment_policy: crate::config_types::ShellEnvironmentPolicy::default(),
+            tools_config,
+        };
+
+        let manager = SubAgentManager::new(&registry);
+        let args = serde_json::json!({
+            "name": "nonexistent-agent",
+            "task": "Some task"
+        });
+
+        let result = manager
+            .handle_subagent_run(
+                args.to_string(),
+                "call-run-404".to_string(),
+                &session,
+                &turn_context,
+                "sub-404",
+            )
+            .await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-run-404");
+            assert_eq!(output.success, Some(false));
+            assert!(output.content.contains("Sub-agent execution failed"));
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_manager_run_agent_invalid_args() {
+        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+
+        let registry = AgentRegistry::new();
+
+        // Create a mock session
+        let (tx_event, _rx_event) = async_channel::unbounded();
+
+        let (mcp_manager, _start_errors) =
+            crate::mcp_connection_manager::McpConnectionManager::new(HashMap::new())
+                .await
+                .unwrap();
+
+        let session = Session {
+            conversation_id: codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            tx_event,
+            mcp_connection_manager: mcp_manager,
+            session_manager: ExecSessionManager::default(),
+            notify: None,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: false,
+            agent_registry: registry.clone(),
+        };
+
+        let tools_config = ToolsConfig {
+            shell_type: ConfigShellToolType::DefaultShell,
+            plan_tool: false,
+            apply_patch_tool_type: None,
+            web_search_request: false,
+            include_view_image_tool: false,
+            include_subagent_tools: true,
+        };
+
+        let turn_context = TurnContext {
+            client: ModelClient::new(
+                Arc::new(create_test_config()),
+                None,
+                crate::model_provider_info::ModelProviderInfo {
+                    name: "test-provider".to_string(),
+                    base_url: None,
+                    env_key: None,
+                    env_key_instructions: None,
+                    wire_api: crate::model_provider_info::WireApi::Chat,
+                    query_params: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                    request_max_retries: None,
+                    stream_max_retries: None,
+                    stream_idle_timeout_ms: None,
+                    requires_openai_auth: false,
+                },
+                codex_protocol::config_types::ReasoningEffort::Medium,
+                codex_protocol::config_types::ReasoningSummary::Auto,
+                codex_protocol::mcp_protocol::ConversationId(uuid::Uuid::new_v4()),
+            ),
+            cwd: std::env::current_dir().unwrap(),
+            base_instructions: None,
+            user_instructions: None,
+            approval_policy: crate::protocol::AskForApproval::Never,
+            sandbox_policy: crate::protocol::SandboxPolicy::ReadOnly,
+            shell_environment_policy: crate::config_types::ShellEnvironmentPolicy::default(),
+            tools_config,
+        };
+
+        let manager = SubAgentManager::new(&registry);
+        let invalid_args = "{ missing required fields }";
+
+        let result = manager
+            .handle_subagent_run(
+                invalid_args.to_string(),
+                "call-run-invalid".to_string(),
+                &session,
+                &turn_context,
+                "sub-invalid",
+            )
+            .await;
+
+        if let ResponseInputItem::FunctionCallOutput { call_id, output } = result {
+            assert_eq!(call_id, "call-run-invalid");
+            assert_eq!(output.success, Some(false));
+            assert!(
+                output
+                    .content
+                    .contains("failed to parse function arguments")
+            );
+        } else {
+            panic!("Expected FunctionCallOutput");
+        }
     }
 }

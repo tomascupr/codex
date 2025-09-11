@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::protocol::InputItem;
+use crate::protocol::{InputItem, Origin};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -47,6 +47,9 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
+        /// Origin of this message (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     Reasoning {
         #[serde(default)]
@@ -55,6 +58,9 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
         content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
+        /// Origin of this reasoning (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.
@@ -64,6 +70,9 @@ pub enum ResponseItem {
         call_id: Option<String>,
         status: LocalShellStatus,
         action: LocalShellAction,
+        /// Origin of this shell call (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     FunctionCall {
         #[serde(skip_serializing)]
@@ -75,6 +84,9 @@ pub enum ResponseItem {
         // Chat Completions + Responses API behavior.
         arguments: String,
         call_id: String,
+        /// Origin of this function call (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     // NOTE: The input schema for `function_call_output` objects that clients send to the
     // OpenAI /v1/responses endpoint is NOT the same shape as the objects the server returns on the
@@ -85,6 +97,9 @@ pub enum ResponseItem {
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
+        /// Origin of this function call output (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     CustomToolCall {
         #[serde(skip_serializing)]
@@ -95,10 +110,16 @@ pub enum ResponseItem {
         call_id: String,
         name: String,
         input: String,
+        /// Origin of this custom tool call (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     CustomToolCallOutput {
         call_id: String,
         output: String,
+        /// Origin of this custom tool output (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -114,6 +135,29 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
         action: WebSearchAction,
+        /// Origin of this web search call (main agent or sub-agent)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
+    },
+
+    // Sub-agent lifecycle events for tracking nested agent execution
+    SubAgentStart {
+        /// Name of the sub-agent that started
+        name: String,
+        /// Description of what the sub-agent will do
+        description: String,
+        /// Origin is always Some(Origin::Main) since main agent emits these events
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
+    },
+    SubAgentEnd {
+        /// Name of the sub-agent that completed
+        name: String,
+        /// Whether the sub-agent execution was successful
+        success: bool,
+        /// Origin is always Some(Origin::Main) since main agent emits these events
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<Origin>,
     },
 
     #[serde(other)]
@@ -136,10 +180,13 @@ impl From<ResponseInputItem> for ResponseItem {
                 role,
                 content,
                 id: None,
+                origin: None,
             },
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
-            }
+            ResponseInputItem::FunctionCallOutput { call_id, output } => Self::FunctionCallOutput {
+                call_id,
+                output,
+                origin: None,
+            },
             ResponseInputItem::McpToolCallOutput { call_id, result } => Self::FunctionCallOutput {
                 call_id,
                 output: FunctionCallOutputPayload {
@@ -152,9 +199,14 @@ impl From<ResponseInputItem> for ResponseItem {
                         },
                     ),
                 },
+                origin: None,
             },
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
+                Self::CustomToolCallOutput {
+                    call_id,
+                    output,
+                    origin: None,
+                }
             }
         }
     }

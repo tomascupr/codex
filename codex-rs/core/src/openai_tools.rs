@@ -70,6 +70,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub include_subagent_tools: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -81,6 +82,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
+    pub(crate) include_subagent_tools: bool,
 }
 
 impl ToolsConfig {
@@ -94,6 +96,7 @@ impl ToolsConfig {
             include_web_search_request,
             use_streamable_shell_tool,
             include_view_image_tool,
+            include_subagent_tools,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -126,6 +129,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
+            include_subagent_tools: *include_subagent_tools,
         }
     }
 }
@@ -164,6 +168,78 @@ pub(crate) enum JsonSchema {
         )]
         additional_properties: Option<bool>,
     },
+}
+
+fn create_subagent_list_tool() -> OpenAiTool {
+    // No properties needed - this tool takes no parameters
+    let properties = BTreeMap::new();
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_list".to_string(),
+        description: "List available sub-agents with their names and descriptions".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_subagent_describe_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "name".to_string(),
+        JsonSchema::String {
+            description: Some("Name of the sub-agent to describe".to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_describe".to_string(),
+        description:
+            "Get detailed information about a specific sub-agent including tools and prompt"
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["name".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_subagent_run_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "name".to_string(),
+        JsonSchema::String {
+            description: Some("Name of the sub-agent to run".to_string()),
+        },
+    );
+    properties.insert(
+        "task".to_string(),
+        JsonSchema::String {
+            description: Some("Task to execute with the sub-agent".to_string()),
+        },
+    );
+    properties.insert(
+        "model".to_string(),
+        JsonSchema::String {
+            description: Some("Optional model override for the sub-agent".to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_run".to_string(),
+        description: "Execute a sub-agent with a specific task".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["name".to_string(), "task".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
 }
 
 fn create_shell_tool() -> OpenAiTool {
@@ -328,6 +404,31 @@ fn create_view_image_tool() -> OpenAiTool {
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
+}
+
+/// Arguments for subagent_list tool - no parameters needed
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SubAgentListArgs {
+    // No fields needed - this is an empty struct for consistency
+}
+
+/// Arguments for subagent_describe tool
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SubAgentDescribeArgs {
+    /// Name of the sub-agent to describe
+    pub(crate) name: String,
+}
+
+/// Arguments for subagent_run tool
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SubAgentRunArgs {
+    /// Name of the sub-agent to run
+    pub(crate) name: String,
+    /// Task to execute with the sub-agent
+    pub(crate) task: String,
+    /// Optional model override for the sub-agent
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
 }
 
 /// Returns JSON values that are compatible with Function Calling in the
@@ -578,6 +679,13 @@ pub(crate) fn get_openai_tools(
         tools.push(create_view_image_tool());
     }
 
+    // Include sub-agent tools when enabled
+    if config.include_subagent_tools {
+        tools.push(create_subagent_list_tool());
+        tools.push(create_subagent_describe_tool());
+        tools.push(create_subagent_run_tool());
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         // Ensure deterministic ordering to maximize prompt cache hits.
         // HashMap iteration order is non-deterministic, so sort by fully-qualified tool name.
@@ -642,6 +750,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -663,6 +772,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -684,6 +794,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(
             &config,
@@ -789,6 +900,7 @@ mod tests {
             include_web_search_request: false,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -866,6 +978,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -928,6 +1041,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -985,6 +1099,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -1042,6 +1157,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -1162,5 +1278,397 @@ The shell tool is used to execute shell commands.
         assert_eq!(name, "shell");
 
         assert_eq!(description, "Runs a shell command and returns its output.");
+    }
+
+    #[test]
+    fn test_get_openai_tools_with_subagent_tools() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            include_subagent_tools: true,
+        });
+        let tools = get_openai_tools(&config, Some(HashMap::new()));
+
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "shell",
+                "subagent_list",
+                "subagent_describe",
+                "subagent_run",
+            ],
+        );
+    }
+
+    #[test]
+    fn test_subagent_tool_schemas() {
+        // Test subagent_list tool
+        let list_tool = create_subagent_list_tool();
+        if let OpenAiTool::Function(ResponsesApiTool {
+            name,
+            description,
+            parameters,
+            ..
+        }) = &list_tool
+        {
+            assert_eq!(name, "subagent_list");
+            assert_eq!(
+                description,
+                "List available sub-agents with their names and descriptions"
+            );
+            if let JsonSchema::Object { required, .. } = parameters {
+                assert_eq!(required, &Some(vec![]));
+            } else {
+                panic!("Expected Object schema for subagent_list");
+            }
+        } else {
+            panic!("Expected Function tool for subagent_list");
+        }
+
+        // Test subagent_describe tool
+        let describe_tool = create_subagent_describe_tool();
+        if let OpenAiTool::Function(ResponsesApiTool {
+            name,
+            description,
+            parameters,
+            ..
+        }) = &describe_tool
+        {
+            assert_eq!(name, "subagent_describe");
+            assert_eq!(
+                description,
+                "Get detailed information about a specific sub-agent including tools and prompt"
+            );
+            if let JsonSchema::Object {
+                required,
+                properties,
+                ..
+            } = parameters
+            {
+                assert_eq!(required, &Some(vec!["name".to_string()]));
+                assert!(properties.contains_key("name"));
+            } else {
+                panic!("Expected Object schema for subagent_describe");
+            }
+        } else {
+            panic!("Expected Function tool for subagent_describe");
+        }
+
+        // Test subagent_run tool
+        let run_tool = create_subagent_run_tool();
+        if let OpenAiTool::Function(ResponsesApiTool {
+            name,
+            description,
+            parameters,
+            ..
+        }) = &run_tool
+        {
+            assert_eq!(name, "subagent_run");
+            assert_eq!(description, "Execute a sub-agent with a specific task");
+            if let JsonSchema::Object {
+                required,
+                properties,
+                ..
+            } = parameters
+            {
+                assert_eq!(
+                    required,
+                    &Some(vec!["name".to_string(), "task".to_string()])
+                );
+                assert!(properties.contains_key("name"));
+                assert!(properties.contains_key("task"));
+                assert!(properties.contains_key("model")); // Optional parameter should still be in properties
+            } else {
+                panic!("Expected Object schema for subagent_run");
+            }
+        } else {
+            panic!("Expected Function tool for subagent_run");
+        }
+    }
+
+    #[test]
+    fn test_tools_config_subagent_tools_enabled() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            include_subagent_tools: true,
+        });
+
+        assert!(config.include_subagent_tools);
+
+        let tools = get_openai_tools(&config, None);
+        let tool_names: Vec<String> = tools
+            .iter()
+            .map(|tool| match tool {
+                OpenAiTool::Function(f) => f.name.clone(),
+                OpenAiTool::LocalShell {} => "local_shell".to_string(),
+                OpenAiTool::WebSearch {} => "web_search".to_string(),
+                OpenAiTool::Freeform(f) => f.name.clone(),
+            })
+            .collect();
+
+        assert!(tool_names.contains(&"subagent_list".to_string()));
+        assert!(tool_names.contains(&"subagent_describe".to_string()));
+        assert!(tool_names.contains(&"subagent_run".to_string()));
+    }
+
+    #[test]
+    fn test_tools_config_subagent_tools_disabled() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            include_subagent_tools: false,
+        });
+
+        assert!(!config.include_subagent_tools);
+
+        let tools = get_openai_tools(&config, None);
+        let tool_names: Vec<String> = tools
+            .iter()
+            .map(|tool| match tool {
+                OpenAiTool::Function(f) => f.name.clone(),
+                OpenAiTool::LocalShell {} => "local_shell".to_string(),
+                OpenAiTool::WebSearch {} => "web_search".to_string(),
+                OpenAiTool::Freeform(f) => f.name.clone(),
+            })
+            .collect();
+
+        assert!(!tool_names.contains(&"subagent_list".to_string()));
+        assert!(!tool_names.contains(&"subagent_describe".to_string()));
+        assert!(!tool_names.contains(&"subagent_run".to_string()));
+    }
+
+    #[test]
+    fn test_subagent_args_serialization() {
+        // Test SubAgentListArgs
+        let list_args = SubAgentListArgs {};
+        let serialized = serde_json::to_string(&list_args).unwrap();
+        assert_eq!(serialized, "{}");
+        let _deserialized: SubAgentListArgs = serde_json::from_str(&serialized).unwrap();
+        // Just ensure it deserializes without error
+
+        // Test SubAgentDescribeArgs
+        let describe_args = SubAgentDescribeArgs {
+            name: "test-agent".to_string(),
+        };
+        let serialized = serde_json::to_string(&describe_args).unwrap();
+        assert!(serialized.contains("test-agent"));
+        let deserialized: SubAgentDescribeArgs = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "test-agent");
+
+        // Test SubAgentRunArgs with model
+        let run_args_with_model = SubAgentRunArgs {
+            name: "code-agent".to_string(),
+            task: "Review this code".to_string(),
+            model: Some("gpt-4".to_string()),
+        };
+        let serialized = serde_json::to_string(&run_args_with_model).unwrap();
+        assert!(serialized.contains("code-agent"));
+        assert!(serialized.contains("Review this code"));
+        assert!(serialized.contains("gpt-4"));
+        let deserialized: SubAgentRunArgs = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "code-agent");
+        assert_eq!(deserialized.task, "Review this code");
+        assert_eq!(deserialized.model, Some("gpt-4".to_string()));
+
+        // Test SubAgentRunArgs without model
+        let run_args_no_model = SubAgentRunArgs {
+            name: "simple-agent".to_string(),
+            task: "Simple task".to_string(),
+            model: None,
+        };
+        let serialized = serde_json::to_string(&run_args_no_model).unwrap();
+        assert!(serialized.contains("simple-agent"));
+        assert!(serialized.contains("Simple task"));
+        assert!(!serialized.contains("model")); // Should be omitted when None
+        let deserialized: SubAgentRunArgs = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, "simple-agent");
+        assert_eq!(deserialized.task, "Simple task");
+        assert_eq!(deserialized.model, None);
+    }
+
+    #[test]
+    fn test_create_tools_json_with_subagent_tools() {
+        // Test Responses API format
+        let tools = vec![
+            create_subagent_list_tool(),
+            create_subagent_describe_tool(),
+            create_subagent_run_tool(),
+        ];
+
+        let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
+        assert_eq!(responses_json.len(), 3);
+
+        // Verify subagent_list tool
+        let list_tool = &responses_json[0];
+        assert_eq!(list_tool["type"], "function");
+        assert_eq!(list_tool["name"], "subagent_list");
+        assert!(
+            list_tool["description"]
+                .as_str()
+                .unwrap()
+                .contains("List available sub-agents")
+        );
+
+        // Verify subagent_describe tool
+        let describe_tool = &responses_json[1];
+        assert_eq!(describe_tool["type"], "function");
+        assert_eq!(describe_tool["name"], "subagent_describe");
+        assert!(
+            describe_tool["parameters"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::Value::String("name".to_string()))
+        );
+
+        // Verify subagent_run tool
+        let run_tool = &responses_json[2];
+        assert_eq!(run_tool["type"], "function");
+        assert_eq!(run_tool["name"], "subagent_run");
+        let required = run_tool["parameters"]["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::Value::String("name".to_string())));
+        assert!(required.contains(&serde_json::Value::String("task".to_string())));
+
+        // Test Chat Completions API format
+        let chat_json = create_tools_json_for_chat_completions_api(&tools).unwrap();
+        assert_eq!(chat_json.len(), 3);
+
+        for tool in &chat_json {
+            assert_eq!(tool["type"], "function");
+            assert!(tool["function"].is_object());
+            assert!(!tool["function"]["type"].is_string()); // type field should be removed from function object
+        }
+    }
+
+    #[test]
+    fn test_subagent_tool_parameter_validation() {
+        // Test that subagent_list has no required parameters
+        let list_tool = create_subagent_list_tool();
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &list_tool {
+            if let JsonSchema::Object {
+                required,
+                properties,
+                ..
+            } = parameters
+            {
+                assert_eq!(required, &Some(vec![]));
+                assert!(properties.is_empty());
+            }
+        }
+
+        // Test that subagent_describe requires name parameter
+        let describe_tool = create_subagent_describe_tool();
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &describe_tool {
+            if let JsonSchema::Object {
+                required,
+                properties,
+                ..
+            } = parameters
+            {
+                assert_eq!(required, &Some(vec!["name".to_string()]));
+                assert_eq!(properties.len(), 1);
+                assert!(properties.contains_key("name"));
+                if let JsonSchema::String { description } = &properties["name"] {
+                    assert!(
+                        description
+                            .as_ref()
+                            .unwrap()
+                            .contains("Name of the sub-agent")
+                    );
+                }
+            }
+        }
+
+        // Test that subagent_run requires name and task, but not model
+        let run_tool = create_subagent_run_tool();
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &run_tool {
+            if let JsonSchema::Object {
+                required,
+                properties,
+                ..
+            } = parameters
+            {
+                assert_eq!(
+                    required,
+                    &Some(vec!["name".to_string(), "task".to_string()])
+                );
+                assert_eq!(properties.len(), 3); // name, task, model
+                assert!(properties.contains_key("name"));
+                assert!(properties.contains_key("task"));
+                assert!(properties.contains_key("model"));
+
+                // Model should not be required
+                assert!(!required.as_ref().unwrap().contains(&"model".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_tools_config_params_construction() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+
+        // Test with all options enabled
+        let params_all_enabled = ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            include_plan_tool: true,
+            include_apply_patch_tool: true,
+            include_web_search_request: true,
+            use_streamable_shell_tool: true,
+            include_view_image_tool: true,
+            include_subagent_tools: true,
+        };
+
+        let config = ToolsConfig::new(&params_all_enabled);
+        assert!(config.include_subagent_tools);
+        assert!(config.plan_tool);
+        assert!(config.web_search_request);
+        assert!(config.include_view_image_tool);
+
+        // Test with subagent tools disabled
+        let params_subagent_disabled = ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: false,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: false,
+            include_subagent_tools: false,
+        };
+
+        let config = ToolsConfig::new(&params_subagent_disabled);
+        assert!(!config.include_subagent_tools);
+        assert!(!config.plan_tool);
+        assert!(!config.web_search_request);
+        assert!(!config.include_view_image_tool);
     }
 }

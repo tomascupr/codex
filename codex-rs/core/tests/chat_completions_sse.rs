@@ -79,6 +79,7 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         content: vec![ContentItem::InputText {
             text: "hello".to_string(),
         }],
+        origin: None,
     }];
 
     let mut stream = match client.stream(&prompt).await {

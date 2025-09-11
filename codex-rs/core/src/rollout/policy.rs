@@ -10,7 +10,9 @@ pub(crate) fn is_persisted_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. } => true,
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::SubAgentStart { .. }
+        | ResponseItem::SubAgentEnd { .. } => true,
         ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
     }
 }

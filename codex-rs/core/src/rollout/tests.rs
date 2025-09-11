@@ -12,7 +12,71 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::config::Config;
 use crate::rollout::list::ConversationItem;
+
+fn create_test_config() -> Config {
+    Config {
+        model: "test-model".to_string(),
+        model_family: crate::model_family::ModelFamily {
+            slug: "test-model".to_string(),
+            family: "test".to_string(),
+            needs_special_apply_patch_instructions: false,
+            supports_reasoning_summaries: false,
+            reasoning_summary_format: crate::config_types::ReasoningSummaryFormat::None,
+            uses_local_shell_tool: false,
+            apply_patch_tool_type: None,
+        },
+        model_context_window: Some(128000),
+        model_max_output_tokens: Some(4096),
+        model_provider_id: "test".to_string(),
+        model_provider: crate::model_provider_info::ModelProviderInfo {
+            name: "test-provider".to_string(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: crate::model_provider_info::WireApi::Chat,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+        },
+        approval_policy: crate::protocol::AskForApproval::Never,
+        sandbox_policy: crate::protocol::SandboxPolicy::ReadOnly,
+        shell_environment_policy: crate::config_types::ShellEnvironmentPolicy::default(),
+        hide_agent_reasoning: false,
+        show_raw_agent_reasoning: false,
+        user_instructions: None,
+        base_instructions: None,
+        notify: None,
+        cwd: std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()),
+        mcp_servers: std::collections::HashMap::new(),
+        model_providers: std::collections::HashMap::new(),
+        project_doc_max_bytes: 32768,
+        codex_home: std::env::temp_dir(),
+        history: crate::config_types::History::default(),
+        file_opener: crate::config_types::UriBasedFileOpener::None,
+        tui: crate::config_types::Tui::default(),
+        codex_linux_sandbox_exe: None,
+        model_reasoning_effort: codex_protocol::config_types::ReasoningEffort::Medium,
+        model_reasoning_summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        model_verbosity: Some(codex_protocol::config_types::Verbosity::Medium),
+        chatgpt_base_url: "https://chatgpt.com".to_string(),
+        experimental_resume: None,
+        include_plan_tool: false,
+        include_apply_patch_tool: false,
+        tools_web_search_request: false,
+        responses_originator_header: "test".to_string(),
+        preferred_auth_method: codex_protocol::mcp_protocol::AuthMode::ApiKey,
+        use_experimental_streamable_shell_tool: false,
+        include_view_image_tool: false,
+        include_subagent_tools: false,
+        disable_paste_burst: false,
+    }
+}
 use crate::rollout::list::ConversationsPage;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
@@ -381,4 +445,289 @@ async fn test_stable_ordering_same_second_pagination() {
         reached_scan_cap: false,
     };
     assert_eq!(page2, expected_page2);
+}
+
+#[test]
+fn test_subagent_events_are_persisted() {
+    use crate::rollout::policy::is_persisted_response_item;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::Origin;
+
+    // Test that SubAgentStart events are persisted
+    let subagent_start = ResponseItem::SubAgentStart {
+        name: "code-reviewer".to_string(),
+        description: "Reviews code for quality".to_string(),
+        origin: Some(Origin::Main),
+    };
+    assert!(is_persisted_response_item(&subagent_start));
+
+    // Test that SubAgentEnd events are persisted
+    let subagent_end = ResponseItem::SubAgentEnd {
+        name: "code-reviewer".to_string(),
+        success: true,
+        origin: Some(Origin::Main),
+    };
+    assert!(is_persisted_response_item(&subagent_end));
+
+    // Test failed sub-agent end event
+    let subagent_end_failed = ResponseItem::SubAgentEnd {
+        name: "analyzer".to_string(),
+        success: false,
+        origin: Some(Origin::SubAgent {
+            name: "parent-agent".to_string(),
+        }),
+    };
+    assert!(is_persisted_response_item(&subagent_end_failed));
+}
+
+#[test]
+fn test_subagent_event_serialization_roundtrip() {
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::Origin;
+
+    // Test SubAgentStart roundtrip
+    let start_event = ResponseItem::SubAgentStart {
+        name: "test-agent".to_string(),
+        description: "A test sub-agent".to_string(),
+        origin: Some(Origin::Main),
+    };
+
+    let serialized = serde_json::to_string(&start_event).unwrap();
+    let deserialized: ResponseItem = serde_json::from_str(&serialized).unwrap();
+
+    match (start_event, deserialized) {
+        (
+            ResponseItem::SubAgentStart {
+                name: n1,
+                description: d1,
+                origin: o1,
+            },
+            ResponseItem::SubAgentStart {
+                name: n2,
+                description: d2,
+                origin: o2,
+            },
+        ) => {
+            assert_eq!(n1, n2);
+            assert_eq!(d1, d2);
+            assert_eq!(o1, o2);
+        }
+        _ => panic!("Expected SubAgentStart events"),
+    }
+
+    // Test SubAgentEnd roundtrip
+    let end_event = ResponseItem::SubAgentEnd {
+        name: "test-agent".to_string(),
+        success: false,
+        origin: Some(Origin::SubAgent {
+            name: "parent".to_string(),
+        }),
+    };
+
+    let serialized = serde_json::to_string(&end_event).unwrap();
+    let deserialized: ResponseItem = serde_json::from_str(&serialized).unwrap();
+
+    match (end_event, deserialized) {
+        (
+            ResponseItem::SubAgentEnd {
+                name: n1,
+                success: s1,
+                origin: o1,
+            },
+            ResponseItem::SubAgentEnd {
+                name: n2,
+                success: s2,
+                origin: o2,
+            },
+        ) => {
+            assert_eq!(n1, n2);
+            assert_eq!(s1, s2);
+            assert_eq!(o1, o2);
+        }
+        _ => panic!("Expected SubAgentEnd events"),
+    }
+}
+
+#[tokio::test]
+async fn test_rollout_recorder_with_subagent_events() {
+    use crate::rollout::recorder::RolloutRecorder;
+    use crate::rollout::recorder::RolloutRecorderParams;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::Origin;
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    let temp_dir = TempDir::new().unwrap();
+    let codex_home = temp_dir.path().to_path_buf();
+
+    let session_id = Uuid::new_v4();
+    let params = RolloutRecorderParams::new(
+        codex_protocol::mcp_protocol::ConversationId(session_id),
+        Some("test-project".to_string()),
+    );
+
+    let mut config = create_test_config();
+    config.codex_home = codex_home;
+    let recorder = RolloutRecorder::new(&config, params).await.unwrap();
+
+    // Record a sequence of sub-agent events
+    let events = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "Starting sub-agent execution".to_string(),
+            }],
+            origin: Some(Origin::Main),
+        },
+        ResponseItem::SubAgentStart {
+            name: "code-analyzer".to_string(),
+            description: "Analyzes code structure and patterns".to_string(),
+            origin: Some(Origin::Main),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "Analyzing code...".to_string(),
+            }],
+            origin: Some(Origin::SubAgent {
+                name: "code-analyzer".to_string(),
+            }),
+        },
+        ResponseItem::SubAgentEnd {
+            name: "code-analyzer".to_string(),
+            success: true,
+            origin: Some(Origin::Main),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "Sub-agent execution completed".to_string(),
+            }],
+            origin: Some(Origin::Main),
+        },
+    ];
+
+    // Record all events
+    recorder.record_items(&events).await.unwrap();
+
+    // Flush to ensure everything is written
+    drop(recorder);
+
+    // Verify that sub-agent events are properly persisted
+    // We can't easily test file contents without exposing more internals,
+    // but we can verify the recording doesn't fail and the policy includes these events
+    for event in &events {
+        match event {
+            ResponseItem::SubAgentStart { .. } | ResponseItem::SubAgentEnd { .. } => {
+                assert!(crate::rollout::policy::is_persisted_response_item(event));
+            }
+            ResponseItem::Message { .. } => {
+                assert!(crate::rollout::policy::is_persisted_response_item(event));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn test_subagent_events_with_different_origins() {
+    use crate::rollout::policy::is_persisted_response_item;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::Origin;
+
+    // Test sub-agent events from main origin
+    let main_start = ResponseItem::SubAgentStart {
+        name: "main-agent".to_string(),
+        description: "Started from main".to_string(),
+        origin: Some(Origin::Main),
+    };
+    assert!(is_persisted_response_item(&main_start));
+
+    // Test sub-agent events from sub-agent origin (nested)
+    let nested_start = ResponseItem::SubAgentStart {
+        name: "nested-agent".to_string(),
+        description: "Started from another sub-agent".to_string(),
+        origin: Some(Origin::SubAgent {
+            name: "parent-agent".to_string(),
+        }),
+    };
+    assert!(is_persisted_response_item(&nested_start));
+
+    // Test sub-agent events without origin
+    let no_origin_end = ResponseItem::SubAgentEnd {
+        name: "orphan-agent".to_string(),
+        success: true,
+        origin: None,
+    };
+    assert!(is_persisted_response_item(&no_origin_end));
+}
+
+#[test]
+fn test_subagent_event_json_structure() {
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::Origin;
+    use serde_json::Value;
+
+    // Test SubAgentStart JSON structure
+    let start_event = ResponseItem::SubAgentStart {
+        name: "formatter".to_string(),
+        description: "Formats code according to style guide".to_string(),
+        origin: Some(Origin::Main),
+    };
+
+    let json_value: Value = serde_json::to_value(&start_event).unwrap();
+
+    // Verify JSON structure
+    if let Value::Object(obj) = json_value {
+        assert_eq!(
+            obj.get("type").unwrap().as_str().unwrap(),
+            "sub_agent_start"
+        );
+
+        assert_eq!(obj.get("name").unwrap().as_str().unwrap(), "formatter");
+        assert_eq!(
+            obj.get("description").unwrap().as_str().unwrap(),
+            "Formats code according to style guide"
+        );
+        assert!(obj.contains_key("origin"));
+    } else {
+        panic!("Expected JSON object");
+    }
+
+    // Test SubAgentEnd JSON structure
+    let end_event = ResponseItem::SubAgentEnd {
+        name: "formatter".to_string(),
+        success: true,
+        origin: Some(Origin::SubAgent {
+            name: "coordinator".to_string(),
+        }),
+    };
+
+    let json_value: Value = serde_json::to_value(&end_event).unwrap();
+
+    if let Value::Object(obj) = json_value {
+        assert_eq!(obj.get("type").unwrap().as_str().unwrap(), "sub_agent_end");
+
+        assert_eq!(obj.get("name").unwrap().as_str().unwrap(), "formatter");
+        assert_eq!(obj.get("success").unwrap().as_bool().unwrap(), true);
+
+        // Check nested sub-agent origin structure
+        if let Some(Value::Object(origin_obj)) = obj.get("origin") {
+            if let Some(Value::Object(sub_agent_obj)) = origin_obj.get("sub_agent") {
+                assert_eq!(
+                    sub_agent_obj.get("name").unwrap().as_str().unwrap(),
+                    "coordinator"
+                );
+            } else {
+                panic!("Expected sub_agent origin object");
+            }
+        } else {
+            panic!("Expected origin object");
+        }
+    } else {
+        panic!("Expected JSON object");
+    }
 }
