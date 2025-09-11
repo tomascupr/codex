@@ -2687,8 +2687,10 @@ impl SubAgentManager {
                                     effective_call_id,
                                 )
                                 .await;
-                                if let ResponseInputItem::FunctionCallOutput { ref call_id, ref output } =
-                                    resp
+                                if let ResponseInputItem::FunctionCallOutput {
+                                    ref call_id,
+                                    ref output,
+                                } = resp
                                 {
                                     conversation.push(ResponseItem::FunctionCallOutput {
                                         call_id: call_id.clone(),

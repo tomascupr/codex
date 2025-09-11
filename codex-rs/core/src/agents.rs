@@ -169,53 +169,65 @@ fn load_agent_from_file(file_path: &Path, agent_name: String) -> Result<SubAgent
 
 /// Parse an agent definition from markdown with YAML frontmatter
 fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, CodexErr> {
-    let content = content.trim();
+    // Normalize CRLF to LF and split into lines
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.trim().lines().collect();
 
-    if !content.starts_with("---") {
+    if lines.first().map(|l| l.trim()) != Some("---") {
         return Err(CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "Agent '{agent_name}' missing YAML frontmatter (must start with '---')"
-            ),
+            format!("Agent '{agent_name}' missing YAML frontmatter (must start with '---')"),
         )));
     }
 
-    // Find the end of frontmatter
-    let search_start = 3; // Skip initial "---"
-    let frontmatter_end = content[search_start..]
-        .find("\n---")
-        .or_else(|| content[search_start..].find("\r\n---"))
-        .ok_or_else(|| {
-            CodexErr::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Agent '{agent_name}' missing frontmatter closing '---'"),
-            ))
-        })?;
+    // Find the closing '---' line
+    let mut fm_end_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if line.trim() == "---" {
+            fm_end_idx = Some(i);
+            break;
+        }
+    }
+    let fm_end_idx = fm_end_idx.ok_or_else(|| {
+        CodexErr::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Agent '{agent_name}' missing frontmatter closing '---'"),
+        ))
+    })?;
 
-    let frontmatter_content = &content[search_start..search_start + frontmatter_end];
-    let body_start = search_start + frontmatter_end + 4; // Skip past "\n---"
-    let body = if body_start < content.len() {
-        content[body_start..].trim()
+    let frontmatter_content = lines[1..fm_end_idx].join("\n");
+    let body = if fm_end_idx + 1 < lines.len() {
+        lines[fm_end_idx + 1..].join("\n").trim().to_string()
     } else {
-        ""
+        String::new()
     };
 
-    // Parse YAML frontmatter
+    // Parse YAML frontmatter (optionally capturing name)
     #[derive(Deserialize)]
     struct FrontMatter {
+        #[serde(default)]
+        name: Option<String>,
         description: String,
         #[serde(default)]
         tools: Option<Vec<String>>,
     }
-
-    let frontmatter: FrontMatter = serde_yaml::from_str(frontmatter_content).map_err(|e| {
+    let frontmatter: FrontMatter = serde_yaml::from_str(&frontmatter_content).map_err(|e| {
         CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "Failed to parse YAML frontmatter for agent '{agent_name}': {e}"
-            ),
+            format!("Failed to parse YAML frontmatter for agent '{agent_name}': {e}"),
         ))
     })?;
+
+    // If a name is declared and differs from the filename, warn and prefer the filename.
+    if let Some(ref declared) = frontmatter.name {
+        if declared.trim() != agent_name {
+            tracing::warn!(
+                "Frontmatter name '{}' differs from filename '{}'; using filename",
+                declared,
+                agent_name
+            );
+        }
+    }
 
     // Validate required fields
     if frontmatter.description.trim().is_empty() {
@@ -224,13 +236,10 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
             format!("Agent '{agent_name}' must have a non-empty description"),
         )));
     }
-
     if body.is_empty() {
         return Err(CodexErr::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "Agent '{agent_name}' must have a non-empty body (system prompt)"
-            ),
+            format!("Agent '{agent_name}' must have a non-empty body (system prompt)"),
         )));
     }
 
@@ -250,7 +259,7 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
         name: agent_name,
         description: frontmatter.description,
         tools: frontmatter.tools,
-        body: body.to_string(),
+        body,
     })
 }
 
@@ -444,11 +453,9 @@ impl NestedAgentRunner {
 
         // Use the parent client to stream the conversation with filtered tools
         let response_stream = _parent_client.stream(&prompt).await.map_err(|e| {
-            CodexErr::Io(std::io::Error::other(
-                format!(
-                    "Failed to start model conversation for sub-agent '{name}': {e}"
-                ),
-            ))
+            CodexErr::Io(std::io::Error::other(format!(
+                "Failed to start model conversation for sub-agent '{name}': {e}"
+            )))
         })?;
 
         // Process the response stream and accumulate results

@@ -204,20 +204,36 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::LocalShellCall {
                 id,
-                call_id: _,
-                status,
+                call_id,
+                status: _,
                 action,
                 ..
             } => {
-                // Confirm with API team.
+                // Chat Completions supports only function tool calls. Map local shell calls
+                // into a synthetic `shell` function call with JSON arguments.
+                let tc_id = call_id
+                    .as_deref()
+                    .or(id.as_deref())
+                    .unwrap_or("")
+                    .to_string();
+                let args_value = match action {
+                    codex_protocol::models::LocalShellAction::Exec(a) => json!({
+                        "command": a.command,
+                        "workdir": a.working_directory,
+                        "timeout_ms": a.timeout_ms,
+                    }),
+                };
+
                 let mut msg = json!({
                     "role": "assistant",
                     "content": null,
                     "tool_calls": [{
-                        "id": id.clone().unwrap_or_else(|| "".to_string()),
-                        "type": "local_shell_call",
-                        "status": status,
-                        "action": action,
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": serde_json::to_string(&args_value).unwrap_or_default(),
+                        }
                     }]
                 });
                 if let Some(reasoning) = reasoning_by_anchor_index.get(&idx)
@@ -277,7 +293,44 @@ pub(crate) async fn stream_chat_completions(
         }
     }
 
-    let tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+    let mut tools_json = create_tools_json_for_chat_completions_api(&prompt.tools)?;
+    // If the tools include the LocalShell variant, Chat Completions still needs a
+    // function tool definition for `shell`.
+    let has_local_shell = prompt
+        .tools
+        .iter()
+        .any(|t| matches!(t, crate::openai_tools::OpenAiTool::LocalShell {}));
+    if has_local_shell {
+        // Minimal schema matching `create_shell_tool()` but in Chat format.
+        let shell_function = json!({
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "description": "Runs a shell command and returns its output",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "The command to execute"
+                        },
+                        "workdir": {
+                            "type": "string",
+                            "description": "The working directory to execute the command in"
+                        },
+                        "timeout_ms": {
+                            "type": "number",
+                            "description": "The timeout for the command in milliseconds"
+                        }
+                    },
+                    "required": ["command"],
+                    "additional_properties": false
+                }
+            }
+        });
+        tools_json.push(shell_function);
+    }
     let payload = json!({
         "model": model_family.slug,
         "messages": messages,
