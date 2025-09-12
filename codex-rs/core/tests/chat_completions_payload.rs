@@ -261,9 +261,14 @@ async fn attaches_reasoning_to_local_shell_call() {
     let assistant = first_assistant(&messages);
 
     assert_eq!(assistant["reasoning"], Value::String("rShell".into()));
+    // LocalShellCall is mapped to a standard Chat Completions function tool call named "shell".
     assert_eq!(
         assistant["tool_calls"][0]["type"],
-        Value::String("local_shell_call".into())
+        Value::String("function".into())
+    );
+    assert_eq!(
+        assistant["tool_calls"][0]["function"]["name"],
+        Value::String("shell".into())
     );
 }
 

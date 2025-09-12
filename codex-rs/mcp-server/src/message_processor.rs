@@ -31,7 +31,6 @@ use mcp_types::ServerCapabilitiesTools;
 use mcp_types::ServerNotification;
 use mcp_types::TextContent;
 use serde_json::json;
-use codex_core::default_client::get_codex_user_agent;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
@@ -232,7 +231,7 @@ impl MessageProcessor {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
-                user_agent: Some(get_codex_user_agent(None)),
+                user_agent: None,
             },
         };
 
