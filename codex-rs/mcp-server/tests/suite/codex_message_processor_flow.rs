@@ -74,6 +74,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
+            include_subagent_tools: None,
             ..Default::default()
         })
         .await
@@ -228,6 +229,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
+            include_subagent_tools: None,
             ..Default::default()
         })
         .await

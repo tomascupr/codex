@@ -504,6 +504,12 @@ pub enum EventMsg {
     ShutdownComplete,
 
     ConversationPath(ConversationPathResponseEvent),
+
+    /// A sub‑agent run has started.
+    SubAgentStart(SubAgentStartEvent),
+
+    /// A sub‑agent run has ended.
+    SubAgentEnd(SubAgentEndEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -516,6 +522,22 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+/// Emitted when a sub‑agent run starts.
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentStartEvent {
+    pub name: String,
+    pub task: String,
+}
+
+/// Emitted when a sub‑agent run completes.
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct SubAgentEndEvent {
+    pub name: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1236,5 +1258,34 @@ mod tests {
 
         let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, event);
+    }
+}
+
+#[cfg(test)]
+mod subagent_tests {
+    use super::*;
+
+    #[test]
+    fn serialize_subagent_start_end() {
+        let start = Event {
+            id: "sub1".to_string(),
+            msg: EventMsg::SubAgentStart(SubAgentStartEvent {
+                name: "docs-writer".to_string(),
+                task: "Write docs".to_string(),
+            }),
+        };
+        let json = serde_json::to_string(&start).unwrap();
+        assert!(json.contains("sub_agent_start"));
+
+        let end = Event {
+            id: "sub1".to_string(),
+            msg: EventMsg::SubAgentEnd(SubAgentEndEvent {
+                name: "docs-writer".to_string(),
+                success: true,
+                error: None,
+            }),
+        };
+        let json = serde_json::to_string(&end).unwrap();
+        assert!(json.contains("sub_agent_end"));
     }
 }

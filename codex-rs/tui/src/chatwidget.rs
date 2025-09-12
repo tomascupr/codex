@@ -1021,7 +1021,9 @@ impl ChatWidget {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
-            | EventMsg::ExecCommandOutputDelta(_) => {}
+            | EventMsg::ExecCommandOutputDelta(_)
+            | EventMsg::SubAgentStart(_)
+            | EventMsg::SubAgentEnd(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
             }
@@ -1080,6 +1082,8 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::SubAgentStart(ev) => self.on_subagent_start(ev),
+            EventMsg::SubAgentEnd(ev) => self.on_subagent_end(ev),
             EventMsg::UserMessage(ev) => {
                 if from_replay {
                     self.on_user_message_event(ev);
@@ -1105,6 +1109,16 @@ impl ChatWidget {
                 }
             }
         }
+    }
+
+    fn on_subagent_start(&mut self, ev: codex_core::protocol::SubAgentStartEvent) {
+        self.add_to_history(history_cell::new_subagent_start(&ev.name, &ev.task));
+    }
+
+    fn on_subagent_end(&mut self, ev: codex_core::protocol::SubAgentEndEvent) {
+        self.add_to_history(history_cell::new_subagent_end(
+            &ev.name, ev.success, ev.error,
+        ));
     }
 
     fn request_redraw(&mut self) {

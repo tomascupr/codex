@@ -1245,6 +1245,7 @@ fn derive_config_from_params(
         base_instructions,
         include_plan_tool,
         include_apply_patch_tool,
+        include_subagent_tools,
     } = params;
     let overrides = ConfigOverrides {
         model,
@@ -1257,6 +1258,7 @@ fn derive_config_from_params(
         base_instructions,
         include_plan_tool,
         include_apply_patch_tool,
+        include_subagent_tools,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
@@ -1323,6 +1325,18 @@ async fn on_exec_approval_response(
         Ok(value) => value,
         Err(err) => {
             error!("request failed: {err:?}");
+            // Mirror the patch-approval behavior: if the request to the client failed,
+            // proactively deny the approval so the core's waiting oneshot is not left
+            // hanging. This keeps failure semantics consistent and unblocks the model.
+            if let Err(submit_err) = conversation
+                .submit(Op::ExecApproval {
+                    id: event_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied ExecApproval after request failure: {submit_err}");
+            }
             return;
         }
     };

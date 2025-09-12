@@ -30,6 +30,7 @@ async fn archive_conversation_moves_rollout_into_archived_directory() {
     let new_request_id = mcp
         .send_new_conversation_request(NewConversationParams {
             model: Some("mock-model".to_string()),
+            include_subagent_tools: None,
             ..Default::default()
         })
         .await
