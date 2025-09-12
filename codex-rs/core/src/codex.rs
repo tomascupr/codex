@@ -2291,6 +2291,7 @@ async fn handle_function_call(
                 name: String,
                 task: String,
                 #[serde(default)]
+                #[allow(dead_code)]
                 model: Option<String>,
             }
             #[derive(Serialize)]

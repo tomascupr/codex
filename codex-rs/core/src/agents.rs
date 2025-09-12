@@ -151,7 +151,7 @@ pub fn discover_and_load_agents(project_root: Option<&Path>) -> CodexResult<Agen
 pub fn filter_tools_for_agent(tools: &[OpenAiTool], allowed: Option<&[String]>) -> Vec<OpenAiTool> {
     match allowed {
         None => tools.to_vec(),
-        Some(allowlist) if allowlist.is_empty() => Vec::new(),
+        Some([]) => Vec::new(),
         Some(allowlist) => {
             use std::collections::HashSet;
             let mut expanded: HashSet<String> = allowlist.iter().cloned().collect();
