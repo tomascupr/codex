@@ -249,11 +249,15 @@ let end_event   = Event { id: sub_id.to_string(), msg: EventMsg::SubAgentEnd(Sub
 ## Configuration
 
 - In‑memory toggle (derived from config): `ToolsConfig { include_subagent_tools: bool, .. }`.
-- Over MCP: `protocol::mcp_protocol::Tools { subagent_tools: Option<bool>, .. }`.
-- CLI override example (enable):
+- Config file: set at the top level in `~/.codex/config.toml`:
+  ```toml
+  include_subagent_tools = true
   ```
-  codex -c tools.subagent_tools=true
+- CLI override example (enable for a single run):
+  ```bash
+  codex -c include_subagent_tools=true
   ```
+- Over MCP: set on the request via `protocol::mcp_protocol::NewConversationParams { include_subagent_tools: Option<bool>, .. }`.
 
 ## File Layout and Key Types
 
@@ -304,7 +308,7 @@ You are a concise writer. Answer in one short paragraph.
 
 2) Start Codex in that directory and ask it to “use the docs agent to summarize X”. The model may call `subagent_list`/`subagent_describe` to discover the agent and then `subagent_run` automatically. You can also craft a function call explicitly in advanced workflows.
 
-Note: Sub‑agent tools are available when the tools config includes the subagent tools flag. In tests we enable this via config; the agent can still call the functions if the provider elects to, but enabling the tools improves steerability/discovery.
+Note: Sub‑agent tools are available only when enabled via `include_subagent_tools` (config file, CLI override, or MCP parameter). The agent may still attempt to call the tools, but enabling the flag improves steerability and discoverability (the tools are advertised explicitly to the model).
 
 ## Testing and Diagnostics
 
