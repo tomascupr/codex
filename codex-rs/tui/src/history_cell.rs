@@ -1077,18 +1077,22 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
 }
 
 pub(crate) fn new_subagent_start(name: &str, task: &str) -> PlainHistoryCell {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push("▶".cyan());
-    spans.push(" ".into());
-    spans.push("subagent".magenta());
-    spans.push(" ".into());
-    spans.push(Span::styled(name.to_string(), Style::new().bold()));
-    if !task.trim().is_empty() {
-        spans.push(" ".into());
-        spans.push("–".dim());
-        spans.push(" ".into());
-        spans.push(task.to_string().dim());
-    }
+    let base: Vec<Span<'static>> = vec![
+        "▶".cyan(),
+        " ".into(),
+        "subagent".magenta(),
+        " ".into(),
+        Span::styled(name.to_string(), Style::new().bold()),
+    ];
+    let spans: Vec<Span<'static>> = if task.trim().is_empty() {
+        base
+    } else {
+        [
+            base,
+            vec![" ".into(), "–".dim(), " ".into(), task.to_string().dim()],
+        ]
+        .concat()
+    };
     PlainHistoryCell {
         lines: vec![spans.into()],
     }
@@ -1099,26 +1103,26 @@ pub(crate) fn new_subagent_end(
     success: bool,
     error: Option<String>,
 ) -> PlainHistoryCell {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    if success {
-        spans.push("✔".green());
+    let head: Span<'static> = if success {
+        "✔".green()
     } else {
-        spans.push("✗".red().bold());
-    }
-    spans.push(" ".into());
-    spans.push("subagent".magenta());
-    spans.push(" ".into());
-    spans.push(Span::styled(name.to_string(), Style::new().bold()));
+        "✗".red().bold()
+    };
+    let mut spans: Vec<Span<'static>> = vec![
+        head,
+        " ".into(),
+        "subagent".magenta(),
+        " ".into(),
+        Span::styled(name.to_string(), Style::new().bold()),
+    ];
     if success {
-        spans.push(" ".into());
-        spans.push("done".dim());
-    } else if let Some(err) = error {
-        if !err.trim().is_empty() {
-            spans.push(" ".into());
-            spans.push("failed:".red());
-            spans.push(" ".into());
-            spans.push(err.into());
-        }
+        spans.extend(vec![" ".into(), "done".dim()]);
+    } else if let Some(err) = error
+        && !err.trim().is_empty()
+    {
+        spans.extend(vec![" ".into(), "failed:".red(), " ".into(), err.into()]);
+    } else {
+        spans.extend(vec![" ".into(), "failed".red()]);
     }
     PlainHistoryCell {
         lines: vec![spans.into()],
