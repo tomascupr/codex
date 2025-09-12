@@ -105,6 +105,7 @@ async fn test_list_and_resume_conversations() {
             path: items[0].path.clone(),
             overrides: Some(NewConversationParams {
                 model: Some("o3".to_string()),
+                include_subagent_tools: None,
                 ..Default::default()
             }),
         })

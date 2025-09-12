@@ -173,6 +173,9 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// Include subagent tools (list/describe/run) available to the model.
+    pub include_subagent_tools: bool,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
@@ -607,6 +610,9 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Whether to include subagent tools in the conversation (default: false).
+    pub include_subagent_tools: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -744,6 +750,7 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
+    pub include_subagent_tools: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -771,6 +778,7 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
+            include_subagent_tools,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
@@ -945,6 +953,9 @@ impl Config {
                 .experimental_use_unified_exec_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            include_subagent_tools: include_subagent_tools
+                .or(cfg.include_subagent_tools)
+                .unwrap_or(false),
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
         };
@@ -1459,6 +1470,7 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 include_view_image_tool: true,
+                include_subagent_tools: false,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
             },
@@ -1515,6 +1527,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
         };
@@ -1586,6 +1599,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
         };
@@ -1643,6 +1657,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            include_subagent_tools: false,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
         };

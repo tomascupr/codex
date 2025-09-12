@@ -258,6 +258,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
+            EventMsg::SubAgentStart(_) | EventMsg::SubAgentEnd(_) => {
+                // For CLI human output, we currently ignore sub-agent start/end markers.
+            }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 // if answer_started is false, this means we haven't received any
                 // delta. Thus, we need to print the message as a new answer.

@@ -71,6 +71,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
+    pub include_subagent_tools: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -83,6 +84,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    pub(crate) include_subagent_tools: bool,
 }
 
 impl ToolsConfig {
@@ -97,6 +99,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            include_subagent_tools,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -130,6 +133,7 @@ impl ToolsConfig {
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
+            include_subagent_tools: *include_subagent_tools,
         }
     }
 }
@@ -319,6 +323,72 @@ fn create_view_image_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_subagent_list_tool() -> OpenAiTool {
+    let properties = BTreeMap::new();
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_list".to_string(),
+        description: "List available sub-agents".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_subagent_describe_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "name".to_string(),
+        JsonSchema::String {
+            description: Some("The sub-agent name".to_string()),
+        },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_describe".to_string(),
+        description: "Describe a sub-agent".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["name".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_subagent_run_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "name".to_string(),
+        JsonSchema::String {
+            description: Some("The sub-agent name".to_string()),
+        },
+    );
+    properties.insert(
+        "task".to_string(),
+        JsonSchema::String {
+            description: Some("Task for the sub-agent".to_string()),
+        },
+    );
+    properties.insert(
+        "model".to_string(),
+        JsonSchema::String {
+            description: Some("Optional model override".to_string()),
+        },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "subagent_run".to_string(),
+        description: "Run a sub-agent on a specific task".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["name".to_string(), "task".to_string()]),
             additional_properties: Some(false),
         },
     })
@@ -561,6 +631,12 @@ pub(crate) fn get_openai_tools(
         tools.push(PLAN_TOOL.clone());
     }
 
+    if config.include_subagent_tools {
+        tools.push(create_subagent_list_tool());
+        tools.push(create_subagent_describe_tool());
+        tools.push(create_subagent_run_tool());
+    }
+
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
@@ -644,12 +720,43 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
         assert_eq_tool_names(
             &tools,
             &["unified_exec", "update_plan", "web_search", "view_image"],
+        );
+    }
+
+    #[test]
+    fn test_get_openai_tools_with_subagents() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: true,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+            include_subagent_tools: true,
+        });
+        let tools = get_openai_tools(&config, Some(HashMap::new()));
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "unified_exec",
+                "update_plan",
+                "subagent_list",
+                "subagent_describe",
+                "subagent_run",
+                "web_search",
+                "view_image",
+            ],
         );
     }
 
@@ -666,6 +773,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -688,6 +796,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
         let tools = get_openai_tools(
             &config,
@@ -794,6 +903,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -872,6 +982,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -935,6 +1046,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -993,6 +1105,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(
@@ -1054,6 +1167,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_subagent_tools: false,
         });
 
         let tools = get_openai_tools(

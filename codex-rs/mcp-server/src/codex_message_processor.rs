@@ -1245,6 +1245,7 @@ fn derive_config_from_params(
         base_instructions,
         include_plan_tool,
         include_apply_patch_tool,
+        include_subagent_tools,
     } = params;
     let overrides = ConfigOverrides {
         model,
@@ -1257,6 +1258,7 @@ fn derive_config_from_params(
         base_instructions,
         include_plan_tool,
         include_apply_patch_tool,
+        include_subagent_tools,
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,

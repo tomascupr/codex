@@ -37,6 +37,8 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::ModelProviderInfo;
+use crate::agents::discover_and_load_agents;
+use crate::agents::filter_tools_for_agent;
 use crate::apply_patch;
 use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
@@ -100,6 +102,8 @@ use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
+use crate::protocol::SubAgentEndEvent;
+use crate::protocol::SubAgentStartEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenUsageInfo;
@@ -469,6 +473,7 @@ impl Session {
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                include_subagent_tools: config.include_subagent_tools,
             }),
             user_instructions,
             base_instructions,
@@ -1150,6 +1155,7 @@ async fn submission_loop(
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                    include_subagent_tools: config.include_subagent_tools,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1239,6 +1245,7 @@ async fn submission_loop(
                             include_view_image_tool: config.include_view_image_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
+                            include_subagent_tools: config.include_subagent_tools,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -2174,6 +2181,496 @@ async fn handle_function_call(
     call_id: String,
 ) -> ResponseInputItem {
     match name.as_str() {
+        "subagent_list" => {
+            let _reg = match discover_and_load_agents(Some(&turn_context.cwd)) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to discover agents: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            // Collect names from internal BTreeMap order (already stable).
+            // We cannot access fields directly; reuse discover and then list dir again.
+            // Simpler: rediscover and collect names via filesystem, but that's unnecessary.
+            // Instead, call a lightweight helper: the registry has names() when used within module,
+            // but it is not exported publicly. To keep scope, rediscover and read directory is already done.
+            // We'll serialize an empty list on success for now.
+            // Better: re-discover and return sorted names by scanning again.
+            let user_dir = dirs::home_dir().map(|h| h.join(".codex/agents"));
+            let mut names: Vec<String> = Vec::new();
+            if let Some(dir) = user_dir
+                && dir.exists()
+                && let Ok(rd) = std::fs::read_dir(&dir)
+            {
+                for e in rd.flatten() {
+                    if e.path().extension().and_then(|s| s.to_str()) == Some("md")
+                        && let Some(stem) = e.path().file_stem().and_then(|s| s.to_str())
+                    {
+                        names.push(stem.to_string());
+                    }
+                }
+            }
+            let project_dir = turn_context.cwd.join(".codex/agents");
+            if project_dir.exists()
+                && let Ok(rd) = std::fs::read_dir(&project_dir)
+            {
+                for e in rd.flatten() {
+                    if e.path().extension().and_then(|s| s.to_str()) == Some("md")
+                        && let Some(stem) = e.path().file_stem().and_then(|s| s.to_str())
+                        && !names.iter().any(|n| n == stem)
+                    {
+                        names.push(stem.to_string());
+                    }
+                }
+            }
+            names.sort();
+            let serialized = match serde_json::to_string(&names) {
+                Ok(s) => s,
+                Err(e) => format!("failed to serialize names: {e}"),
+            };
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: serialized,
+                    success: Some(true),
+                },
+            }
+        }
+        "subagent_describe" => {
+            #[derive(Deserialize)]
+            struct DescribeArgs {
+                name: String,
+            }
+            let args = match serde_json::from_str::<DescribeArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let _reg = match discover_and_load_agents(Some(&turn_context.cwd)) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to discover agents: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            // Re-parse the specific file to get rich data reliably
+            let mut found = None;
+            for d in [
+                dirs::home_dir().map(|h| h.join(".codex/agents")),
+                Some(turn_context.cwd.join(".codex/agents")),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let path = d.join(format!("{}.md", args.name));
+                if path.exists()
+                    && let Ok(contents) = std::fs::read_to_string(&path)
+                    && let Ok(agent) =
+                        crate::agents::parse_agent_markdown(&contents, args.name.clone())
+                {
+                    found = Some(agent);
+                    break;
+                }
+            }
+            let (content, success) = if let Some(agent) = found {
+                #[derive(Serialize)]
+                struct Desc<'a> {
+                    name: &'a str,
+                    description: &'a str,
+                    tools: &'a Option<Vec<String>>,
+                    body: &'a str,
+                }
+                let desc = Desc {
+                    name: &agent.name,
+                    description: &agent.description,
+                    tools: &agent.tools,
+                    body: &agent.body,
+                };
+                (
+                    serde_json::to_string(&desc).unwrap_or_else(|e| format!("{e}")),
+                    Some(true),
+                )
+            } else {
+                (format!("unknown sub-agent: {}", args.name), Some(false))
+            };
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload { content, success },
+            }
+        }
+        "subagent_run" => {
+            #[derive(Deserialize)]
+            struct RunArgs {
+                name: String,
+                task: String,
+                #[serde(default)]
+                model: Option<String>,
+            }
+            #[derive(Serialize)]
+            struct SubAgentResult<'a> {
+                agent_name: &'a str,
+                task: &'a str,
+                success: bool,
+                output: String,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                error: Option<String>,
+            }
+
+            let args = match serde_json::from_str::<RunArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+
+            // Discover agent
+            let agent = {
+                let mut found = None;
+                for d in [
+                    dirs::home_dir().map(|h| h.join(".codex/agents")),
+                    Some(turn_context.cwd.join(".codex/agents")),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let path = d.join(format!("{}.md", args.name));
+                    if path.exists()
+                        && let Ok(contents) = std::fs::read_to_string(&path)
+                        && let Ok(agent) =
+                            crate::agents::parse_agent_markdown(&contents, args.name.clone())
+                    {
+                        found = Some(agent);
+                        break;
+                    }
+                }
+                found
+            };
+
+            if agent.is_none() {
+                let content = format!(
+                    "Sub-agent execution failed: unknown sub-agent '{}'; use subagent_list to view available agents",
+                    args.name
+                );
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content,
+                        success: Some(false),
+                    },
+                };
+            }
+            let agent = match agent {
+                Some(a) => a,
+                None => unreachable!(),
+            };
+
+            // Emit start event
+            let start = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::SubAgentStart(SubAgentStartEvent {
+                    name: agent.name.clone(),
+                    task: args.task.clone(),
+                }),
+            };
+            sess.send_event(start).await;
+
+            // Compute available tools and filter by allowlist; remove subagent_* tools to prevent recursion.
+            let available = get_openai_tools(
+                &turn_context.tools_config,
+                Some(sess.mcp_connection_manager.list_all_tools()),
+            );
+            let mut filtered = filter_tools_for_agent(&available, agent.tools.as_deref());
+            filtered.retain(|t| match t {
+                crate::openai_tools::OpenAiTool::Function(f) => {
+                    let n = f.name.as_str();
+                    n != "subagent_list" && n != "subagent_describe" && n != "subagent_run"
+                }
+                _ => true,
+            });
+
+            // Build nested prompt
+            let base_instructions_override = Some(format!("{}\n\nTask: {}", agent.body, args.task));
+            let prompt = Prompt {
+                input: vec![],
+                tools: filtered.clone(),
+                base_instructions_override,
+            };
+
+            // Nested tool-executing loop without recursing into try_run_turn/handle_function_call.
+            let mut success = false;
+            let mut output = String::new();
+            let mut error: Option<String> = None;
+            let mut pending: Vec<ResponseInputItem> = Vec::new();
+
+            // Limit nested tool rounds to prevent infinite loops.
+            for _round in 0..6 {
+                // Convert pending tool outputs into ResponseItems for the next turn input.
+                let extra_input: Vec<ResponseItem> = pending
+                    .drain(..)
+                    .filter_map(|resp| match resp {
+                        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                            Some(ResponseItem::FunctionCallOutput { call_id, output })
+                        }
+                        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                            Some(ResponseItem::CustomToolCallOutput { call_id, output })
+                        }
+                        ResponseInputItem::McpToolCallOutput { call_id, result } => {
+                            let output = match result {
+                                Ok(call_tool_result) => {
+                                    convert_call_tool_result_to_function_call_output_payload(
+                                        &call_tool_result,
+                                    )
+                                }
+                                Err(err) => FunctionCallOutputPayload {
+                                    content: err,
+                                    success: Some(false),
+                                },
+                            };
+                            Some(ResponseItem::FunctionCallOutput { call_id, output })
+                        }
+                        _ => None,
+                    })
+                    .collect();
+
+                let nested_prompt = Prompt {
+                    input: extra_input,
+                    tools: filtered.clone(),
+                    base_instructions_override: prompt.base_instructions_override.clone(),
+                };
+
+                // Drive the stream for a single turn.
+                let mut stream = match turn_context.client.clone().stream(&nested_prompt).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        break;
+                    }
+                };
+
+                let mut had_tool_calls = false;
+                let mut last_text: Option<String> = None;
+                while let Some(ev) = stream.next().await {
+                    match ev {
+                        Ok(ResponseEvent::OutputItemDone(item)) => {
+                            // surface events for UI/history
+                            for msg in map_response_item_to_event_messages(
+                                &item,
+                                sess.show_raw_agent_reasoning,
+                            ) {
+                                let event = Event {
+                                    id: sub_id.clone(),
+                                    msg,
+                                };
+                                sess.send_event(event).await;
+                            }
+
+                            match item {
+                                ResponseItem::FunctionCall {
+                                    name,
+                                    arguments,
+                                    call_id,
+                                    ..
+                                } => {
+                                    had_tool_calls = true;
+                                    let resp = match name.as_str() {
+                                        // Prevent recursion explicitly even though tools were filtered.
+                                        "subagent_list" | "subagent_describe" | "subagent_run" => {
+                                            ResponseInputItem::FunctionCallOutput {
+                                                call_id,
+                                                output: FunctionCallOutputPayload {
+                                                    content: "Sub-agents are not enabled in this nested context".to_string(),
+                                                    success: Some(false),
+                                                },
+                                            }
+                                        }
+                                        "container.exec" | "shell" => {
+                                            let params = match parse_container_exec_arguments(
+                                                arguments,
+                                                turn_context,
+                                                &call_id,
+                                            ) {
+                                                Ok(p) => p,
+                                                Err(output) => {
+                                                    pending.push(*output);
+                                                    continue;
+                                                }
+                                            };
+                                            handle_container_exec_with_params(
+                                                params,
+                                                sess,
+                                                turn_context,
+                                                &mut TurnDiffTracker::default(),
+                                                sub_id.clone(),
+                                                call_id,
+                                            )
+                                            .await
+                                        }
+                                        other => match sess.mcp_connection_manager.parse_tool_name(other) {
+                                            Some((server, tool_name)) => {
+                                                handle_mcp_tool_call(
+                                                    sess,
+                                                    &sub_id,
+                                                    call_id,
+                                                    server,
+                                                    tool_name,
+                                                    arguments,
+                                                    None,
+                                                )
+                                                .await
+                                            }
+                                            None => ResponseInputItem::FunctionCallOutput {
+                                                call_id,
+                                                output: FunctionCallOutputPayload {
+                                                    content: format!("unsupported call: {name}"),
+                                                    success: Some(false),
+                                                },
+                                            },
+                                        },
+                                    };
+                                    pending.push(resp);
+                                }
+                                ResponseItem::LocalShellCall {
+                                    id,
+                                    call_id,
+                                    status: _,
+                                    action,
+                                } => {
+                                    had_tool_calls = true;
+                                    let LocalShellAction::Exec(action) = action;
+                                    let params = ShellToolCallParams {
+                                        command: action.command,
+                                        workdir: action.working_directory,
+                                        timeout_ms: action.timeout_ms,
+                                        with_escalated_permissions: None,
+                                        justification: None,
+                                    };
+                                    let effective_call_id = call_id.or(id).unwrap_or_default();
+                                    let exec_params = to_exec_params(params, turn_context);
+                                    let resp = handle_container_exec_with_params(
+                                        exec_params,
+                                        sess,
+                                        turn_context,
+                                        &mut TurnDiffTracker::default(),
+                                        sub_id.clone(),
+                                        effective_call_id,
+                                    )
+                                    .await;
+                                    pending.push(resp);
+                                }
+                                ResponseItem::CustomToolCall {
+                                    id: _,
+                                    call_id,
+                                    name,
+                                    input,
+                                    status: _,
+                                } => {
+                                    had_tool_calls = true;
+                                    let resp = handle_custom_tool_call(
+                                        sess,
+                                        turn_context,
+                                        &mut TurnDiffTracker::default(),
+                                        sub_id.clone(),
+                                        name,
+                                        input,
+                                        call_id,
+                                    )
+                                    .await;
+                                    pending.push(resp);
+                                }
+                                ResponseItem::Message { role, content, .. }
+                                    if role == "assistant" =>
+                                {
+                                    let mut buf = String::new();
+                                    for c in content {
+                                        if let ContentItem::OutputText { text } = c {
+                                            buf.push_str(&text);
+                                        }
+                                    }
+                                    if !buf.is_empty() {
+                                        last_text = Some(buf);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(ResponseEvent::Completed { .. }) => {
+                            if !pending.is_empty() {
+                                // Execute next turn with tool outputs.
+                                break;
+                            }
+                            success = true;
+                            output = last_text.unwrap_or_default();
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            error = Some(e.to_string());
+                            break;
+                        }
+                    }
+                }
+
+                if success || error.is_some() {
+                    break;
+                }
+                if !had_tool_calls && pending.is_empty() {
+                    // Nothing else to do.
+                    success = true;
+                    break;
+                }
+            }
+
+            // Emit end event
+            let end = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::SubAgentEnd(SubAgentEndEvent {
+                    name: agent.name.clone(),
+                    success,
+                    error: error.clone(),
+                }),
+            };
+            sess.send_event(end).await;
+
+            let result = SubAgentResult {
+                agent_name: &agent.name,
+                task: &args.task,
+                success,
+                output,
+                error,
+            };
+            let serialized = serde_json::to_string(&result)
+                .unwrap_or_else(|e| format!("failed to serialize result: {e}"));
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: serialized,
+                    success: Some(success),
+                },
+            }
+        }
         "container.exec" | "shell" => {
             let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
                 Ok(params) => params,

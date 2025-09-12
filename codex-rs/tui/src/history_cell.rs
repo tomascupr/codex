@@ -1073,6 +1073,55 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_subagent_start(name: &str, task: &str) -> PlainHistoryCell {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push("▶".cyan());
+    spans.push(" ".into());
+    spans.push("subagent".magenta());
+    spans.push(" ".into());
+    spans.push(Span::styled(name.to_string(), Style::new().bold()));
+    if !task.trim().is_empty() {
+        spans.push(" ".into());
+        spans.push("–".dim());
+        spans.push(" ".into());
+        spans.push(task.to_string().dim());
+    }
+    PlainHistoryCell {
+        lines: vec![spans.into()],
+    }
+}
+
+pub(crate) fn new_subagent_end(
+    name: &str,
+    success: bool,
+    error: Option<String>,
+) -> PlainHistoryCell {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if success {
+        spans.push("✔".green());
+    } else {
+        spans.push("✗".red().bold());
+    }
+    spans.push(" ".into());
+    spans.push("subagent".magenta());
+    spans.push(" ".into());
+    spans.push(Span::styled(name.to_string(), Style::new().bold()));
+    if success {
+        spans.push(" ".into());
+        spans.push("done".dim());
+    } else if let Some(err) = error {
+        if !err.trim().is_empty() {
+            spans.push(" ".into());
+            spans.push("failed:".red());
+            spans.push(" ".into());
+            spans.push(err.into());
+        }
+    }
+    PlainHistoryCell {
+        lines: vec![spans.into()],
+    }
+}
+
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;

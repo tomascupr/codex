@@ -78,6 +78,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             cwd: Some(working_directory.to_string_lossy().into_owned()),
+            include_subagent_tools: None,
             ..Default::default()
         })
         .await?;

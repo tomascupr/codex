@@ -45,6 +45,7 @@ async fn test_conversation_create_and_send_message_ok() {
     let new_conv_id = mcp
         .send_new_conversation_request(NewConversationParams {
             model: Some("o3".to_string()),
+            include_subagent_tools: None,
             ..Default::default()
         })
         .await

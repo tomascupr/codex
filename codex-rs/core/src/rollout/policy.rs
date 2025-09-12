@@ -38,6 +38,8 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::SubAgentStart(_)
+        | EventMsg::SubAgentEnd(_)
         | EventMsg::TokenCount(_) => true,
         EventMsg::Error(_)
         | EventMsg::TaskStarted(_)
