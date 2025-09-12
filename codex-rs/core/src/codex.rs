@@ -2719,7 +2719,7 @@ impl SubAgentManager {
                 return ResponseInputItem::FunctionCallOutput {
                     call_id,
                     output: FunctionCallOutputPayload {
-                        content: format!("Agent not found: {e}"),
+                        content: format!("Sub-agent execution failed: {e}"),
                         success: Some(false),
                     },
                 };

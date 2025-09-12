@@ -60,12 +60,13 @@ pub fn render_template(template: &str, args: &[String]) -> Result<String, Templa
             if matches!(chars.peek(), Some('}')) {
                 chars.next();
                 if let Ok(idx) = num.parse::<usize>()
-                    && idx >= 1 {
-                        if let Some(val) = args.get(idx - 1) {
-                            out.push_str(val);
-                        }
-                        continue;
+                    && idx >= 1
+                {
+                    if let Some(val) = args.get(idx - 1) {
+                        out.push_str(val);
                     }
+                    continue;
+                }
             }
             // Fallback: literal
             out.push_str("${");
@@ -78,14 +79,16 @@ pub fn render_template(template: &str, args: &[String]) -> Result<String, Templa
         }
         // $1..$9 (note: $10 => $1 + '0')
         if let Some(d) = chars.peek().copied()
-            && d.is_ascii_digit() && d != '0' {
-                let idx = d as usize - '0' as usize;
-                chars.next();
-                if let Some(val) = args.get(idx - 1) {
-                    out.push_str(val);
-                }
-                continue;
+            && d.is_ascii_digit()
+            && d != '0'
+        {
+            let idx = d as usize - '0' as usize;
+            chars.next();
+            if let Some(val) = args.get(idx - 1) {
+                out.push_str(val);
             }
+            continue;
+        }
         // Unknown placeholder: keep as-is ($X → $X)
         out.push('$');
         if let Some(nc) = chars.peek().copied() {

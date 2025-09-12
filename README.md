@@ -85,6 +85,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
+- [**Sub‑agents**](./docs/subagents.md)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)
@@ -99,4 +100,3 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-
