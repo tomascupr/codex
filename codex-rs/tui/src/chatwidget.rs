@@ -289,7 +289,9 @@ impl ChatWidget {
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+        self.finalize_turn_with_error_message(
+            "Conversation interrupted - tell the model what to do differently".to_owned(),
+        );
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -1291,8 +1293,8 @@ impl ChatWidget {
         self.config.model = model;
     }
 
-    pub(crate) fn add_info_message(&mut self, message: String) {
-        self.add_to_history(history_cell::new_info_event(message));
+    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
