@@ -1,11 +1,15 @@
-use std::fs::{create_dir_all, write};
+use std::fs::create_dir_all;
+use std::fs::write;
 use std::path::Path;
 use tempfile::TempDir;
 
-use codex_core::agents::{
-    AgentRegistry, NestedAgentRunner, SubAgent, SubAgentDescription, SubAgentResult,
-    discover_and_load_agents, load_agents_from_directory,
-};
+use codex_core::agents::AgentRegistry;
+use codex_core::agents::NestedAgentRunner;
+use codex_core::agents::SubAgent;
+use codex_core::agents::SubAgentDescription;
+use codex_core::agents::SubAgentResult;
+use codex_core::agents::discover_and_load_agents;
+use codex_core::agents::load_agents_from_directory;
 
 /// Create test agents in a directory
 fn create_test_agents(agents_dir: &Path) -> Result<(), std::io::Error> {
@@ -387,10 +391,10 @@ fn test_edge_cases() {
     let mut registry = AgentRegistry::new();
     for i in 0..100 {
         let agent = SubAgent {
-            name: format!("agent{:03}", i),
-            description: format!("Agent number {}", i),
+            name: format!("agent{i:03}"),
+            description: format!("Agent number {i}"),
             tools: None,
-            body: format!("You are agent number {}", i),
+            body: format!("You are agent number {i}"),
         };
         registry.insert_agent(agent);
     }

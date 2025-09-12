@@ -20,6 +20,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
+use codex_core::protocol::ListCustomCommandsResponseEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
@@ -50,7 +51,6 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use serde_json;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -179,6 +179,8 @@ impl ChatWidget {
         ));
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+        // Ask codex-core to enumerate custom commands for this session.
+        self.submit_op(Op::ListCustomCommands);
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -883,8 +885,7 @@ impl ChatWidget {
                         } else if parts.len() == 1 {
                             let agent_name = parts[0].trim();
                             self.submit_text_message(format!(
-                                "Please specify a task for the '{}' sub-agent. Usage: /agent {} <task>",
-                                agent_name, agent_name
+                                "Please specify a task for the '{agent_name}' sub-agent. Usage: /agent {agent_name} <task>"
                             ));
                         } else {
                             self.submit_text_message("Usage: /agent <name> <task>. For example: /agent reviewer \"check this code for bugs\"".to_string());
@@ -1128,6 +1129,7 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
+            EventMsg::ListCustomCommandsResponse(ev) => self.on_list_custom_commands(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -1401,6 +1403,12 @@ impl ChatWidget {
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
 
+    fn on_list_custom_commands(&mut self, ev: ListCustomCommandsResponseEvent) {
+        let len = ev.custom_commands.len();
+        debug!("received {len} custom commands");
+        self.bottom_pane.set_custom_commands(ev.custom_commands);
+    }
+
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.
@@ -1435,7 +1443,7 @@ impl ChatWidget {
                 "/agent".to_string()
             }
         } else {
-            format!("/{}", name)
+            format!("/{name}")
         };
         self.add_to_history(history_cell::new_user_prompt(command_display));
 
@@ -1461,15 +1469,14 @@ impl ChatWidget {
                     let agent_name = args_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     let task = args_obj.get("task").and_then(|v| v.as_str()).unwrap_or("");
                     format!(
-                        "Please execute the subagent_run function call with name='{}' and task='{}'.",
-                        agent_name, task
+                        "Please execute the subagent_run function call with name='{agent_name}' and task='{task}'."
                     )
                 } else {
                     "Please execute the subagent_run function call with the provided arguments."
                         .to_string()
                 }
             }
-            _ => format!("Please execute the {} function call.", name),
+            _ => format!("Please execute the {name} function call."),
         };
 
         // Submit this as a user input that will cause the model to immediately call the function
@@ -1480,8 +1487,7 @@ impl ChatWidget {
         if let Err(e) = self.codex_op_tx.send(Op::UserInput { items }) {
             tracing::error!("failed to send function call request: {e}");
             self.add_to_history(history_cell::new_error_event(format!(
-                "Failed to submit function call request: {}",
-                e
+                "Failed to submit function call request: {e}"
             )));
         }
     }

@@ -712,7 +712,7 @@ fn test_subagent_event_json_structure() {
         assert_eq!(obj.get("type").unwrap().as_str().unwrap(), "sub_agent_end");
 
         assert_eq!(obj.get("name").unwrap().as_str().unwrap(), "formatter");
-        assert_eq!(obj.get("success").unwrap().as_bool().unwrap(), true);
+        assert!(obj.get("success").unwrap().as_bool().unwrap());
 
         // Check nested sub-agent origin structure
         if let Some(Value::Object(origin_obj)) = obj.get("origin") {

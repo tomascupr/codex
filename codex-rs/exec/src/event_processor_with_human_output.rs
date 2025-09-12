@@ -571,6 +571,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let status = if success { "completed" } else { "failed" };
                 println!("Sub-agent {status}: {name}");
             }
+            EventMsg::ListCustomCommandsResponse(_) => {
+                // Currently ignored in exec output.
+            }
         }
         CodexStatus::Running
     }

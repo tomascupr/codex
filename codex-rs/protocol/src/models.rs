@@ -8,7 +8,8 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
-use crate::protocol::{InputItem, Origin};
+use crate::protocol::InputItem;
+use crate::protocol::Origin;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]

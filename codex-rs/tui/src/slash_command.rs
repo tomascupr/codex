@@ -195,8 +195,7 @@ mod tests {
         for cmd in SlashCommand::iter() {
             assert!(
                 !cmd.description().is_empty(),
-                "Command {:?} has empty description",
-                cmd
+                "Command {cmd:?} has empty description"
             );
         }
     }

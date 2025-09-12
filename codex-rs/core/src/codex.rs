@@ -9,7 +9,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
-use crate::agents::{AgentRegistry, NestedAgentRunner, discover_and_load_agents};
+use crate::agents::AgentRegistry;
+use crate::agents::NestedAgentRunner;
+use crate::agents::discover_and_load_agents;
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -90,6 +92,7 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::ListCustomCommandsResponseEvent;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::Origin;
@@ -1347,6 +1350,35 @@ async fn submission_loop(
                 };
                 if let Err(e) = tx_event.send(event).await {
                     warn!("failed to send ListCustomPromptsResponse event: {e}");
+                }
+            }
+            Op::ListCustomCommands => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                // Discover commands from user and project directories with precedence.
+                let mut custom_commands = Vec::new();
+                match crate::custom_commands::discover_and_load_commands(Some(&turn_context.cwd)) {
+                    Ok(cmds) => {
+                        custom_commands = cmds
+                            .into_iter()
+                            .filter(|c| !c.spec.disabled)
+                            .map(|c| c.spec)
+                            .collect();
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to discover custom commands: {e}");
+                    }
+                }
+
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::ListCustomCommandsResponse(ListCustomCommandsResponseEvent {
+                        custom_commands,
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ListCustomCommandsResponse event: {e}");
                 }
             }
             Op::Compact => {
@@ -3911,7 +3943,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_subagent_manager_list_agents() {
-        use crate::agents::{AgentRegistry, SubAgent};
+        use crate::agents::AgentRegistry;
+        use crate::agents::SubAgent;
 
         let mut registry = AgentRegistry::new();
 
@@ -3952,7 +3985,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_subagent_manager_describe_agent_success() {
-        use crate::agents::{AgentRegistry, SubAgent};
+        use crate::agents::AgentRegistry;
+        use crate::agents::SubAgent;
 
         let mut registry = AgentRegistry::new();
 
@@ -4044,8 +4078,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_subagent_manager_run_agent_success() {
-        use crate::agents::{AgentRegistry, SubAgent};
-        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+        use crate::agents::AgentRegistry;
+        use crate::agents::SubAgent;
+        use crate::openai_tools::ConfigShellToolType;
+        use crate::openai_tools::ToolsConfig;
 
         let mut registry = AgentRegistry::new();
 
@@ -4154,13 +4190,14 @@ mod tests {
                     || output_content.contains("connection")
             );
         } else {
-            panic!("Expected FunctionCallOutput, got: {:?}", result);
+            panic!("Expected FunctionCallOutput, got: {result:?}");
         }
     }
 
     #[tokio::test]
     async fn test_subagent_manager_run_agent_not_found() {
-        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+        use crate::openai_tools::ConfigShellToolType;
+        use crate::openai_tools::ToolsConfig;
 
         let registry = AgentRegistry::new(); // Empty registry
 
@@ -4253,7 +4290,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_subagent_manager_run_agent_invalid_args() {
-        use crate::openai_tools::{ConfigShellToolType, ToolsConfig};
+        use crate::openai_tools::ConfigShellToolType;
+        use crate::openai_tools::ToolsConfig;
 
         let registry = AgentRegistry::new();
 

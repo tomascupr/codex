@@ -1565,62 +1565,59 @@ The shell tool is used to execute shell commands.
     fn test_subagent_tool_parameter_validation() {
         // Test that subagent_list has no required parameters
         let list_tool = create_subagent_list_tool();
-        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &list_tool {
-            if let JsonSchema::Object {
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &list_tool
+            && let JsonSchema::Object {
                 required,
                 properties,
                 ..
             } = parameters
-            {
-                assert_eq!(required, &Some(vec![]));
-                assert!(properties.is_empty());
-            }
+        {
+            assert_eq!(required, &Some(vec![]));
+            assert!(properties.is_empty());
         }
 
         // Test that subagent_describe requires name parameter
         let describe_tool = create_subagent_describe_tool();
-        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &describe_tool {
-            if let JsonSchema::Object {
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &describe_tool
+            && let JsonSchema::Object {
                 required,
                 properties,
                 ..
             } = parameters
-            {
-                assert_eq!(required, &Some(vec!["name".to_string()]));
-                assert_eq!(properties.len(), 1);
-                assert!(properties.contains_key("name"));
-                if let JsonSchema::String { description } = &properties["name"] {
-                    assert!(
-                        description
-                            .as_ref()
-                            .unwrap()
-                            .contains("Name of the sub-agent")
-                    );
-                }
+        {
+            assert_eq!(required, &Some(vec!["name".to_string()]));
+            assert_eq!(properties.len(), 1);
+            assert!(properties.contains_key("name"));
+            if let JsonSchema::String { description } = &properties["name"] {
+                assert!(
+                    description
+                        .as_ref()
+                        .unwrap()
+                        .contains("Name of the sub-agent")
+                );
             }
         }
 
         // Test that subagent_run requires name and task, but not model
         let run_tool = create_subagent_run_tool();
-        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &run_tool {
-            if let JsonSchema::Object {
+        if let OpenAiTool::Function(ResponsesApiTool { parameters, .. }) = &run_tool
+            && let JsonSchema::Object {
                 required,
                 properties,
                 ..
             } = parameters
-            {
-                assert_eq!(
-                    required,
-                    &Some(vec!["name".to_string(), "task".to_string()])
-                );
-                assert_eq!(properties.len(), 3); // name, task, model
-                assert!(properties.contains_key("name"));
-                assert!(properties.contains_key("task"));
-                assert!(properties.contains_key("model"));
+        {
+            assert_eq!(
+                required,
+                &Some(vec!["name".to_string(), "task".to_string()])
+            );
+            assert_eq!(properties.len(), 3); // name, task, model
+            assert!(properties.contains_key("name"));
+            assert!(properties.contains_key("task"));
+            assert!(properties.contains_key("model"));
 
-                // Model should not be required
-                assert!(!required.as_ref().unwrap().contains(&"model".to_string()));
-            }
+            // Model should not be required
+            assert!(!required.as_ref().unwrap().contains(&"model".to_string()));
         }
     }
 

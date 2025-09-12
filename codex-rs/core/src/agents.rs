@@ -10,13 +10,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::client::ModelClient;
 use crate::conversation_history::ConversationHistory;
 use crate::error::CodexErr;
-use crate::openai_tools::{ToolsConfig, get_openai_tools};
-use codex_protocol::models::{ContentItem, ResponseItem};
+use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::get_openai_tools;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 
 /// A sub-agent definition loaded from a markdown file with YAML frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -219,14 +222,14 @@ fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgent, C
     })?;
 
     // If a name is declared and differs from the filename, warn and prefer the filename.
-    if let Some(ref declared) = frontmatter.name {
-        if declared.trim() != agent_name {
-            tracing::warn!(
-                "Frontmatter name '{}' differs from filename '{}'; using filename",
-                declared,
-                agent_name
-            );
-        }
+    if let Some(ref declared) = frontmatter.name
+        && declared.trim() != agent_name
+    {
+        tracing::warn!(
+            "Frontmatter name '{}' differs from filename '{}'; using filename",
+            declared,
+            agent_name
+        );
     }
 
     // Validate required fields
@@ -391,6 +394,7 @@ impl NestedAgentRunner {
 
     /// Execute a sub-agent with the given task
     /// Creates an isolated conversation context and applies tool filtering enforcement
+    #[allow(dead_code)]
     pub(crate) async fn run_agent(
         &self,
         name: &str,
@@ -741,9 +745,11 @@ System prompt for agent 2.
 
     #[test]
     fn test_filter_tools_for_agent() {
-        use crate::openai_tools::{
-            FreeformTool, FreeformToolFormat, JsonSchema, OpenAiTool, ResponsesApiTool,
-        };
+        use crate::openai_tools::FreeformTool;
+        use crate::openai_tools::FreeformToolFormat;
+        use crate::openai_tools::JsonSchema;
+        use crate::openai_tools::OpenAiTool;
+        use crate::openai_tools::ResponsesApiTool;
         use std::collections::BTreeMap;
 
         // Create mock tools for testing
@@ -1172,9 +1178,13 @@ Project system prompt.
         // Create a mock ModelClient for testing
         // Note: This is a minimal mock that won't actually be used in the current implementation
         // but is required for the method signature
-        use crate::config::{Config, ConfigOverrides, ConfigToml};
-        use crate::model_provider_info::{ModelProviderInfo, WireApi};
-        use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary};
+        use crate::config::Config;
+        use crate::config::ConfigOverrides;
+        use crate::config::ConfigToml;
+        use crate::model_provider_info::ModelProviderInfo;
+        use crate::model_provider_info::WireApi;
+        use codex_protocol::config_types::ReasoningEffort;
+        use codex_protocol::config_types::ReasoningSummary;
         use codex_protocol::mcp_protocol::ConversationId;
         use std::path::PathBuf;
         use std::sync::Arc;

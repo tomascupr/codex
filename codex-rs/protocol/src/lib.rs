@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod config_types;
+pub mod custom_commands;
 pub mod custom_prompts;
 pub mod mcp_protocol;
 pub mod message_history;

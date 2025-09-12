@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use crate::custom_commands::CustomCommandSpec;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
@@ -167,6 +168,9 @@ pub enum Op {
 
     /// Request the list of available custom prompts.
     ListCustomPrompts,
+
+    /// Request the list of available custom commands.
+    ListCustomCommands,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -501,6 +505,9 @@ pub enum EventMsg {
 
     /// List of custom prompts available to the agent.
     ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
+    /// List of custom commands available to the agent.
+    ListCustomCommandsResponse(ListCustomCommandsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -972,6 +979,12 @@ pub struct McpListToolsResponseEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
+}
+
+/// Response payload for `Op::ListCustomCommands`.
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ListCustomCommandsResponseEvent {
+    pub custom_commands: Vec<CustomCommandSpec>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]

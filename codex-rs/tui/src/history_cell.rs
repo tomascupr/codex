@@ -1980,8 +1980,10 @@ mod tests {
 
     #[test]
     fn test_subagent_history_cell_creation() {
-        use ratatui::style::{Color, Style};
-        use ratatui::text::{Line, Span};
+        use ratatui::style::Color;
+        use ratatui::style::Style;
+        use ratatui::text::Line;
+        use ratatui::text::Span;
 
         let content_lines = vec![
             Line::from(Span::styled(
@@ -1999,8 +2001,10 @@ mod tests {
 
     #[test]
     fn test_subagent_history_cell_display_lines() {
-        use ratatui::style::{Color, Style};
-        use ratatui::text::{Line, Span};
+        use ratatui::style::Color;
+        use ratatui::style::Style;
+        use ratatui::text::Line;
+        use ratatui::text::Span;
 
         let content_lines = vec![
             Line::from("Sub-agent starting..."),
@@ -2112,8 +2116,10 @@ mod tests {
 
     #[test]
     fn test_subagent_history_cell_transcript_format() {
-        use ratatui::style::{Color, Style};
-        use ratatui::text::{Line, Span};
+        use ratatui::style::Color;
+        use ratatui::style::Style;
+        use ratatui::text::Line;
+        use ratatui::text::Span;
 
         let content_lines = vec![
             Line::from(vec![

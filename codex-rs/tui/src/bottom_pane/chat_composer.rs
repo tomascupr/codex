@@ -29,6 +29,7 @@ use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use codex_protocol::custom_commands::CustomCommandSpec;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -87,6 +88,7 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    custom_commands: Vec<CustomCommandSpec>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -126,6 +128,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            custom_commands: Vec::new(),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -388,6 +391,15 @@ impl ChatComposer {
                                 }
                             }
                         }
+                        CommandItem::CustomCommand(idx) => {
+                            if let Some(name) = popup.command_name(idx) {
+                                let starts_with_cmd =
+                                    first_line.trim_start().starts_with(&format!("/{name}"));
+                                if !starts_with_cmd {
+                                    self.textarea.set_text(&format!("/{name} "));
+                                }
+                            }
+                        }
                     }
                     // After completing the command, move cursor to the end.
                     if !self.textarea.text().is_empty() {
@@ -402,6 +414,33 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
+                // Always prefer inline parsing of the current text first so that
+                // `/name args` works even if the selection state is not initialized.
+                let current_full = self.textarea.text().to_string();
+                if current_full.starts_with('/') {
+                    // Avoid borrowing `self` while `popup` is mutably borrowed.
+                    let commands = self.custom_commands.clone();
+                    let parts: Vec<&str> = current_full.splitn(2, ' ').collect();
+                    let command_str = parts.get(0).map(|s| &s[1..]).unwrap_or("");
+                    if let Ok(cmd) = command_str.parse::<SlashCommand>() {
+                        self.textarea.set_text("");
+                        return (InputResult::Command(cmd), true);
+                    }
+                    let needle = command_str.to_ascii_lowercase();
+                    if let Some(spec) = commands.into_iter().find(|c| {
+                        c.name.eq_ignore_ascii_case(&needle)
+                            || c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&needle))
+                    }) {
+                        let arg_str = parts.get(1).copied().unwrap_or("");
+                        let argv = shlex::split(arg_str).unwrap_or_default();
+                        let rendered =
+                            codex_core::template_processor::render_template(&spec.template, &argv)
+                                .unwrap_or_else(|e| format!("Template error: {e}"));
+                        self.textarea.set_text("");
+                        return (InputResult::Submitted(rendered), true);
+                    }
+                }
+
                 if let Some(sel) = popup.selected_item() {
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
@@ -409,6 +448,9 @@ impl ChatComposer {
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
                             popup.prompt_content(idx).map(|s| s.to_string())
+                        }
+                        CommandItem::CustomCommand(idx) => {
+                            popup.command_template(idx).map(|s| s.to_string())
                         }
                         _ => None,
                     };
@@ -419,7 +461,7 @@ impl ChatComposer {
                         CommandItem::Builtin(cmd) => {
                             return (InputResult::Command(cmd), true);
                         }
-                        CommandItem::UserPrompt(_) => {
+                        CommandItem::UserPrompt(_) | CommandItem::CustomCommand(_) => {
                             if let Some(contents) = prompt_content {
                                 return (InputResult::Submitted(contents), true);
                             }
@@ -427,7 +469,7 @@ impl ChatComposer {
                         }
                     }
                 }
-                // Fallback to default newline handling if no command selected.
+                // Fallback to default newline handling when text isn't a slash command.
                 self.handle_key_event_without_popup(key_event)
             }
             input => self.handle_input_basic(input),
@@ -821,20 +863,28 @@ impl ChatComposer {
                 // Check if this is a slash command with arguments
                 if text.starts_with('/') && !has_attachments {
                     let parts: Vec<&str> = text.splitn(2, ' ').collect();
-                    if parts.len() >= 1 {
-                        let command_str = &parts[0][1..]; // Remove the leading '/'
-                        if let Ok(cmd) = command_str.parse::<SlashCommand>() {
-                            if cmd == SlashCommand::Agent && parts.len() > 1 {
-                                // For /agent command with arguments, return CommandWithArgs
-                                return (
-                                    InputResult::CommandWithArgs(cmd, parts[1].to_string()),
-                                    true,
-                                );
-                            } else {
-                                // For other commands or /agent without args, return regular Command
-                                return (InputResult::Command(cmd), true);
-                            }
+                    let command_str = parts.get(0).map(|s| &s[1..]).unwrap_or("");
+                    if let Ok(cmd) = command_str.parse::<SlashCommand>() {
+                        if cmd == SlashCommand::Agent && parts.len() > 1 {
+                            // For /agent command with arguments, return CommandWithArgs
+                            return (
+                                InputResult::CommandWithArgs(cmd, parts[1].to_string()),
+                                true,
+                            );
+                        } else {
+                            // For other commands or /agent without args, return regular Command
+                            return (InputResult::Command(cmd), true);
                         }
+                    }
+
+                    // Custom commands (name or alias)
+                    if let Some(spec) = self.find_custom_command(command_str) {
+                        let arg_str = parts.get(1).copied().unwrap_or("");
+                        let argv = shlex::split(arg_str).unwrap_or_default();
+                        let rendered =
+                            codex_core::template_processor::render_template(&spec.template, &argv)
+                                .unwrap_or_else(|e| format!("Template error: {e}"));
+                        return (InputResult::Submitted(rendered), true);
                     }
                 }
 
@@ -843,6 +893,21 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn find_custom_command(&self, name: &str) -> Option<&CustomCommandSpec> {
+        if name.is_empty() {
+            return None;
+        }
+        let needle = name.to_ascii_lowercase();
+        self.custom_commands
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&needle))
+            .or_else(|| {
+                self.custom_commands
+                    .iter()
+                    .find(|c| c.aliases.iter().any(|a| a.eq_ignore_ascii_case(&needle)))
+            })
     }
 
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
@@ -1165,7 +1230,10 @@ impl ChatComposer {
             }
             _ => {
                 if input_starts_with_slash {
-                    let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
+                    let mut command_popup = CommandPopup::new(
+                        self.custom_prompts.clone(),
+                        self.custom_commands.clone(),
+                    );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -1177,6 +1245,13 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_custom_commands(&mut self, commands: Vec<CustomCommandSpec>) {
+        self.custom_commands = commands.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_commands(commands);
         }
     }
 
@@ -1751,6 +1826,9 @@ mod tests {
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/mo'")
                 }
+                Some(CommandItem::CustomCommand(_)) => {
+                    panic!("unexpected custom command selected for '/mo'")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -1870,6 +1948,114 @@ mod tests {
         assert!(composer.textarea.is_empty(), "composer should be cleared");
         composer.insert_str("@");
         assert_eq!(composer.textarea.text(), "@");
+    }
+
+    #[test]
+    fn custom_command_from_fs_is_listed_and_submits_template() {
+        use codex_core::custom_commands::discover_and_load_commands;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use std::fs;
+        use tempfile::tempdir;
+
+        // Create a tiny project with .codex/commands/greet.md
+        let tmp = tempdir().unwrap();
+        let project_root = tmp.path();
+        let commands_dir = project_root.join(".codex/commands");
+        fs::create_dir_all(&commands_dir).unwrap();
+        fs::write(
+            commands_dir.join("greet.md"),
+            r#"---
+description: Say hello
+aliases: [hi]
+---
+Hello $1!
+"#,
+        )
+        .unwrap();
+
+        // Discover via core, map to specs for the TUI.
+        let specs: Vec<codex_protocol::custom_commands::CustomCommandSpec> =
+            discover_and_load_commands(Some(project_root))
+                .unwrap()
+                .into_iter()
+                .map(|c| c.spec)
+                .collect();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "greet");
+
+        // Wire into a composer and type "/gr" to bring up the popup.
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_custom_commands(specs);
+        type_chars_humanlike(&mut composer, &['/', 'g', 'r']);
+
+        // Press Enter to select the highlighted custom command. It should
+        // submit the template text as the message.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "Hello $1!"),
+            other => panic!("expected Submitted from custom command, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_command_inline_invocation_substitutes_args() {
+        use codex_protocol::custom_commands::CustomCommandArgSpec;
+        use codex_protocol::custom_commands::CustomCommandId;
+        use codex_protocol::custom_commands::CustomCommandSpec;
+        use codex_protocol::custom_commands::CustomCommandVisibility;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // Build a command spec directly (no filesystem) for fast test.
+        let spec = CustomCommandSpec {
+            id: CustomCommandId("greet".into()),
+            name: "greet".into(),
+            aliases: vec!["hi".into()],
+            description: "Say hello".into(),
+            template: "Hello $1 and $*".into(),
+            args: vec![CustomCommandArgSpec {
+                name: "name".into(),
+                required: false,
+                description: None,
+            }],
+            tags: vec![],
+            version: None,
+            disabled: false,
+            visibility: CustomCommandVisibility::Popup,
+        };
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_custom_commands(vec![spec]);
+
+        // Place an inline custom command with args and press Enter.
+        composer.set_text_content("/greet Alice Bob".to_string());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "Hello Alice and Alice Bob"),
+            other => panic!("expected Submitted, got: {other:?}"),
+        }
     }
 
     #[test]
