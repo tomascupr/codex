@@ -258,8 +258,60 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
-            EventMsg::SubAgentStart(_) | EventMsg::SubAgentEnd(_) => {
-                // For CLI human output, we currently ignore sub-agent start/end markers.
+            EventMsg::SubAgentStart(ev) => {
+                let name = ev.name;
+                let task = ev.task;
+                if task.trim().is_empty() {
+                    ts_println!(
+                        self,
+                        "{} {} {}",
+                        "▶".style(self.cyan),
+                        "subagent".style(self.magenta),
+                        name.style(self.bold)
+                    );
+                } else {
+                    ts_println!(
+                        self,
+                        "{} {} {} {} {}",
+                        "▶".style(self.cyan),
+                        "subagent".style(self.magenta),
+                        name.style(self.bold),
+                        "–".style(self.dimmed),
+                        task.style(self.dimmed)
+                    );
+                }
+            }
+            EventMsg::SubAgentEnd(ev) => {
+                let name = ev.name;
+                if ev.success {
+                    ts_println!(
+                        self,
+                        "{} {} {} {}",
+                        "✔".style(self.green),
+                        "subagent".style(self.magenta),
+                        name.style(self.bold),
+                        "done".style(self.dimmed)
+                    );
+                } else if let Some(err) = ev.error.filter(|e| !e.trim().is_empty()) {
+                    ts_println!(
+                        self,
+                        "{} {} {} {} {}",
+                        "✗".style(self.red).style(self.bold),
+                        "subagent".style(self.magenta),
+                        name.style(self.bold),
+                        "failed:".style(self.red),
+                        err
+                    );
+                } else {
+                    ts_println!(
+                        self,
+                        "{} {} {} {}",
+                        "✗".style(self.red).style(self.bold),
+                        "subagent".style(self.magenta),
+                        name.style(self.bold),
+                        "failed".style(self.red)
+                    );
+                }
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
                 // if answer_started is false, this means we haven't received any

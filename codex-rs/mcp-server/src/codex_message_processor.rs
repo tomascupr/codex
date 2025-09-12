@@ -1325,6 +1325,18 @@ async fn on_exec_approval_response(
         Ok(value) => value,
         Err(err) => {
             error!("request failed: {err:?}");
+            // Mirror the patch-approval behavior: if the request to the client failed,
+            // proactively deny the approval so the core's waiting oneshot is not left
+            // hanging. This keeps failure semantics consistent and unblocks the model.
+            if let Err(submit_err) = conversation
+                .submit(Op::ExecApproval {
+                    id: event_id.clone(),
+                    decision: ReviewDecision::Denied,
+                })
+                .await
+            {
+                error!("failed to submit denied ExecApproval after request failure: {submit_err}");
+            }
             return;
         }
     };
