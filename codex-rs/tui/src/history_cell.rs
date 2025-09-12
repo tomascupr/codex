@@ -2130,7 +2130,7 @@ mod tests {
         ];
 
         let cell = SubAgentHistoryCell::new("reviewer".to_string(), content_lines);
-        let transcript_lines = cell.transcript_lines();
+        let _transcript_lines = cell.transcript_lines();
 
         let rendered = render_transcript(&cell);
 

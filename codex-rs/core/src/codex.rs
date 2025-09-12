@@ -25,8 +25,12 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
+use notify::RecommendedWatcher;
+use notify::RecursiveMode;
+use notify::Watcher;
 use serde::Serialize;
 use serde_json;
+use tokio::sync::mpsc as tokio_mpsc;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -301,6 +305,11 @@ pub(crate) struct Session {
 
     /// Registry of available sub-agents
     agent_registry: AgentRegistry,
+
+    /// File watchers for `.codex/commands/` to enable hot-reload of custom commands.
+    commands_watchers: Mutex<Option<Vec<notify::RecommendedWatcher>>>,
+    /// Whether the watchers have been started for this session.
+    commands_watch_started: Mutex<bool>,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -510,6 +519,8 @@ impl Session {
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             agent_registry,
+            commands_watchers: Mutex::new(None),
+            commands_watch_started: Mutex::new(false),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -993,6 +1004,86 @@ impl Session {
     }
 }
 
+/// Start file watchers on user and project `.codex/commands/` directories.
+/// When changes are detected, rediscover commands and push an updated
+/// `ListCustomCommandsResponse` event.
+async fn start_commands_watchers(sess: Arc<Session>, cwd: PathBuf) -> anyhow::Result<()> {
+    // Channel to debounce file events from notify (which can run on a blocking thread).
+    let (tx, mut rx) = tokio_mpsc::unbounded_channel::<()>();
+
+    // Construct watcher callback that sends a unit signal on any event.
+    let mk_watcher = || -> anyhow::Result<RecommendedWatcher> {
+        let tx = tx.clone();
+        let watcher =
+            notify::recommended_watcher(move |_res: Result<notify::Event, notify::Error>| {
+                let _ = tx.send(());
+            })?;
+        Ok(watcher)
+    };
+
+    let mut watchers: Vec<RecommendedWatcher> = Vec::new();
+
+    // User directory
+    if let Some(home) = dirs::home_dir() {
+        let user_dir = home.join(".codex").join("commands");
+        if user_dir.exists() {
+            let mut w = mk_watcher()?;
+            w.watch(&user_dir, RecursiveMode::Recursive)?;
+            watchers.push(w);
+        }
+    }
+    // Project directory
+    let proj_dir = cwd.join(".codex").join("commands");
+    if proj_dir.exists() {
+        let mut w = mk_watcher()?;
+        w.watch(&proj_dir, RecursiveMode::Recursive)?;
+        watchers.push(w);
+    }
+
+    // Store watchers on the session to keep them alive.
+    {
+        let mut guard = sess.commands_watchers.lock_unchecked();
+        *guard = Some(watchers);
+    }
+
+    // Debounce loop: on first event, wait a short delay, then refresh.
+    let tx_event = sess.tx_event.clone();
+    tokio::spawn(async move {
+        use tokio::time::Duration;
+        use tokio::time::sleep;
+        while (rx.recv().await).is_some() {
+            // Coalesce multiple events arriving in bursts.
+            sleep(Duration::from_millis(200)).await;
+            // Drain any additional queued signals.
+            while rx.try_recv().is_ok() {}
+
+            // Re-discover and emit update.
+            let custom_commands =
+                match crate::custom_commands::discover_and_load_commands(Some(&cwd)) {
+                    Ok(cmds) => cmds
+                        .into_iter()
+                        .filter(|c| !c.spec.disabled)
+                        .map(|c| c.spec)
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!("Failed to discover custom commands on change: {e}");
+                        Vec::new()
+                    }
+                };
+            let _ = tx_event
+                .send(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::ListCustomCommandsResponse(ListCustomCommandsResponseEvent {
+                        custom_commands,
+                    }),
+                })
+                .await;
+        }
+    });
+
+    Ok(())
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.interrupt_task();
@@ -1379,6 +1470,21 @@ async fn submission_loop(
                 };
                 if let Err(e) = tx_event.send(event).await {
                     warn!("failed to send ListCustomCommandsResponse event: {e}");
+                }
+
+                // Lazily start file watchers for hot-reload of commands.
+                {
+                    let mut started = sess.commands_watch_started.lock_unchecked();
+                    if !*started {
+                        *started = true;
+                        let sess_clone = Arc::clone(&sess);
+                        let cwd = turn_context.cwd.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = start_commands_watchers(sess_clone, cwd).await {
+                                tracing::warn!("Failed to start custom commands watcher: {e}");
+                            }
+                        });
+                    }
                 }
             }
             Op::Compact => {
@@ -4114,6 +4220,8 @@ mod tests {
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: false,
             agent_registry: registry.clone(),
+            commands_watchers: Mutex::new(None),
+            commands_watch_started: Mutex::new(false),
         };
 
         let tools_config = ToolsConfig {
@@ -4221,6 +4329,8 @@ mod tests {
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: false,
             agent_registry: registry.clone(),
+            commands_watchers: Mutex::new(None),
+            commands_watch_started: Mutex::new(false),
         };
 
         let tools_config = ToolsConfig {
@@ -4315,6 +4425,8 @@ mod tests {
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: false,
             agent_registry: registry.clone(),
+            commands_watchers: Mutex::new(None),
+            commands_watch_started: Mutex::new(false),
         };
 
         let tools_config = ToolsConfig {

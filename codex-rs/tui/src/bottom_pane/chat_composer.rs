@@ -421,7 +421,7 @@ impl ChatComposer {
                     // Avoid borrowing `self` while `popup` is mutably borrowed.
                     let commands = self.custom_commands.clone();
                     let parts: Vec<&str> = current_full.splitn(2, ' ').collect();
-                    let command_str = parts.get(0).map(|s| &s[1..]).unwrap_or("");
+                    let command_str = parts.first().map(|s| &s[1..]).unwrap_or("");
                     if let Ok(cmd) = command_str.parse::<SlashCommand>() {
                         self.textarea.set_text("");
                         return (InputResult::Command(cmd), true);
@@ -863,7 +863,7 @@ impl ChatComposer {
                 // Check if this is a slash command with arguments
                 if text.starts_with('/') && !has_attachments {
                     let parts: Vec<&str> = text.splitn(2, ' ').collect();
-                    let command_str = parts.get(0).map(|s| &s[1..]).unwrap_or("");
+                    let command_str = parts.first().map(|s| &s[1..]).unwrap_or("");
                     if let Ok(cmd) = command_str.parse::<SlashCommand>() {
                         if cmd == SlashCommand::Agent && parts.len() > 1 {
                             // For /agent command with arguments, return CommandWithArgs

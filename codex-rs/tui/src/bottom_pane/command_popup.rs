@@ -37,14 +37,23 @@ impl CommandPopup {
         mut commands: Vec<CustomCommandSpec>,
     ) -> Self {
         let builtins = built_in_slash_commands();
-        // Exclude items that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
+        // Exclude items that collide with builtin command names (case-insensitive) and sort by name.
+        let exclude: HashSet<String> = builtins
+            .iter()
+            .map(|(n, _)| (*n).to_ascii_lowercase())
+            .collect();
+        prompts.retain(|p| !exclude.contains(&p.name.to_ascii_lowercase()));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
-        // For commands, also exclude disabled and names that collide with prompts or builtins.
+        // For commands, also exclude disabled/hidden and names that collide with prompts or builtins (case-insensitive).
         let mut taken: HashSet<String> = exclude.clone();
-        taken.extend(prompts.iter().map(|p| p.name.clone()));
-        commands.retain(|c| !c.disabled && !taken.contains(&c.name));
+        taken.extend(prompts.iter().map(|p| p.name.to_ascii_lowercase()));
+        commands.retain(|c| {
+            let is_hidden = matches!(
+                c.visibility,
+                codex_protocol::custom_commands::CustomCommandVisibility::Hidden
+            );
+            !c.disabled && !is_hidden && !taken.contains(&c.name.to_ascii_lowercase())
+        });
         commands.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             command_filter: String::new(),
@@ -59,20 +68,25 @@ impl CommandPopup {
         let exclude: HashSet<String> = self
             .builtins
             .iter()
-            .map(|(n, _)| (*n).to_string())
+            .map(|(n, _)| (*n).to_ascii_lowercase())
             .collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
+        prompts.retain(|p| !exclude.contains(&p.name.to_ascii_lowercase()));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
         // Re-apply command filtering against updated prompt names.
         let mut taken: HashSet<String> = self
             .builtins
             .iter()
-            .map(|(n, _)| (*n).to_string())
+            .map(|(n, _)| (*n).to_ascii_lowercase())
             .collect();
-        taken.extend(self.prompts.iter().map(|p| p.name.clone()));
-        self.commands
-            .retain(|c| !c.disabled && !taken.contains(&c.name));
+        taken.extend(self.prompts.iter().map(|p| p.name.to_ascii_lowercase()));
+        self.commands.retain(|c| {
+            let is_hidden = matches!(
+                c.visibility,
+                codex_protocol::custom_commands::CustomCommandVisibility::Hidden
+            );
+            !c.disabled && !is_hidden && !taken.contains(&c.name.to_ascii_lowercase())
+        });
         self.commands.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
@@ -85,14 +99,20 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_commands(&mut self, mut commands: Vec<CustomCommandSpec>) {
-        // Exclude commands colliding with builtins or prompts; drop disabled.
+        // Exclude commands colliding with builtins or prompts (case-insensitive); drop disabled or hidden.
         let mut taken: HashSet<String> = self
             .builtins
             .iter()
-            .map(|(n, _)| (*n).to_string())
+            .map(|(n, _)| (*n).to_ascii_lowercase())
             .collect();
-        taken.extend(self.prompts.iter().map(|p| p.name.clone()));
-        commands.retain(|c| !c.disabled && !taken.contains(&c.name));
+        taken.extend(self.prompts.iter().map(|p| p.name.to_ascii_lowercase()));
+        commands.retain(|c| {
+            let is_hidden = matches!(
+                c.visibility,
+                codex_protocol::custom_commands::CustomCommandVisibility::Hidden
+            );
+            !c.disabled && !is_hidden && !taken.contains(&c.name.to_ascii_lowercase())
+        });
         commands.sort_by(|a, b| a.name.cmp(&b.name));
         self.commands = commands;
     }
@@ -283,6 +303,8 @@ impl WidgetRef for CommandPopup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::custom_commands::CustomCommandId;
+    use codex_protocol::custom_commands::CustomCommandVisibility;
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
@@ -394,7 +416,7 @@ mod tests {
         // Builtin 'init' should exclude same-named custom command
         let commands = vec![
             CustomCommandSpec {
-                id: codex_protocol::custom_commands::CustomCommandId("init".into()),
+                id: CustomCommandId("init".into()),
                 name: "init".into(),
                 aliases: vec![],
                 description: "init duplicate".into(),
@@ -403,10 +425,10 @@ mod tests {
                 tags: vec![],
                 version: None,
                 disabled: false,
-                visibility: codex_protocol::custom_commands::CustomCommandVisibility::Popup,
+                visibility: CustomCommandVisibility::Popup,
             },
             CustomCommandSpec {
-                id: codex_protocol::custom_commands::CustomCommandId("hello".into()),
+                id: CustomCommandId("hello".into()),
                 name: "hello".into(),
                 aliases: vec!["hi".into()],
                 description: "greeting".into(),
@@ -415,7 +437,7 @@ mod tests {
                 tags: vec![],
                 version: None,
                 disabled: false,
-                visibility: codex_protocol::custom_commands::CustomCommandVisibility::Popup,
+                visibility: CustomCommandVisibility::Popup,
             },
         ];
         let popup = CommandPopup::new(Vec::new(), commands);
@@ -429,5 +451,57 @@ mod tests {
         }
         assert!(names.contains(&"hello".to_string()));
         assert!(!names.contains(&"init".to_string()));
+    }
+
+    #[test]
+    fn hidden_commands_are_not_listed_but_inline_ok() {
+        let commands = vec![CustomCommandSpec {
+            id: CustomCommandId("secret".into()),
+            name: "secret".into(),
+            aliases: vec![],
+            description: "hidden".into(),
+            template: "top secret".into(),
+            args: vec![],
+            tags: vec![],
+            version: None,
+            disabled: false,
+            visibility: CustomCommandVisibility::Hidden,
+        }];
+        let popup = CommandPopup::new(Vec::new(), commands);
+        let items = popup.filtered_items();
+        let any_custom = items
+            .iter()
+            .any(|it| matches!(it, CommandItem::CustomCommand(_)));
+        assert!(!any_custom, "hidden commands should not appear in popup");
+    }
+
+    #[test]
+    fn case_insensitive_dedupe_vs_prompts() {
+        let prompts = vec![CustomPrompt {
+            name: "Readme".to_string(),
+            path: "/tmp/readme.md".to_string().into(),
+            content: "body".to_string(),
+        }];
+        let commands = vec![CustomCommandSpec {
+            id: CustomCommandId("readme".into()),
+            name: "readme".into(),
+            aliases: vec![],
+            description: "duplicate".into(),
+            template: "ignored".into(),
+            args: vec![],
+            tags: vec![],
+            version: None,
+            disabled: false,
+            visibility: CustomCommandVisibility::Popup,
+        }];
+        let popup = CommandPopup::new(prompts, commands);
+        let items = popup.filtered_items();
+        let any_case_dup = items
+            .iter()
+            .any(|it| matches!(it, CommandItem::CustomCommand(_)));
+        assert!(
+            !any_case_dup,
+            "command name equal to prompt (case-insensitively) must be hidden"
+        );
     }
 }

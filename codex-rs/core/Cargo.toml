@@ -56,6 +56,7 @@ tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 wildmatch = "2.4.0"
+notify = { version = "6" }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
