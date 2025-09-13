@@ -1921,6 +1921,38 @@ mod tests {
     }
 
     #[test]
+    fn agents_list_empty_snapshot() {
+        let agents: Vec<SubAgent> = Vec::new();
+        let cell = new_agents_list(&agents);
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn agents_list_with_entries_snapshot() {
+        let agents = vec![
+            SubAgent {
+                name: "docs".into(),
+                description: "writes concise docs".into(),
+                tools: Some(vec!["shell".into(), "web_search".into()]),
+                body: "You are a concise writer.".into(),
+            },
+            SubAgent {
+                name: "tests".into(),
+                description: "writes tests".into(),
+                tools: None,
+                body: "You write tests.".into(),
+            },
+        ];
+
+        let cell = new_agents_list(&agents);
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines).join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;

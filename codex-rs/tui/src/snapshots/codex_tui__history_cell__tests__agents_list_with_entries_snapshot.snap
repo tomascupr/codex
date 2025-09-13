@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Agents
+  └ docs — writes concise docs  tools: shell, web_search
+    tests — writes tests

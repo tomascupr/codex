@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Agents
+  └ none found (create ~/.codex/agents or ./.codex/agents)
