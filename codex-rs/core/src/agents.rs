@@ -148,7 +148,10 @@ pub fn discover_and_load_agents(project_root: Option<&Path>) -> CodexResult<Agen
 }
 
 /// Filter available OpenAI tools using an optional allowlist, expanding shell aliases.
-pub fn filter_tools_for_agent(tools: &[OpenAiTool], allowed: Option<&[String]>) -> Vec<OpenAiTool> {
+pub(crate) fn filter_tools_for_agent(
+    tools: &[OpenAiTool],
+    allowed: Option<&[String]>,
+) -> Vec<OpenAiTool> {
     match allowed {
         None => tools.to_vec(),
         Some([]) => Vec::new(),
