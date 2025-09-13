@@ -870,6 +870,30 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Agents => {
+                // Discover sub‑agents in user and project scopes and list them.
+                // If discovery fails, show an error cell instead of crashing.
+                let mut agents = Vec::new();
+                match codex_core::agents::discover_and_load_agents(Some(&self.config.cwd)) {
+                    Ok(registry) => {
+                        // AgentRegistry does not expose iteration; recreate via names/get.
+                        for name in registry.names() {
+                            if let Some(a) = registry.get(&name) {
+                                agents.push(a.clone());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to discover agents: {e}"
+                        )));
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                self.add_to_history(history_cell::new_agents_list(&agents));
+                self.request_redraw();
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }

@@ -14,6 +14,7 @@ use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
+use codex_core::agents::SubAgent;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
@@ -1127,6 +1128,48 @@ pub(crate) fn new_subagent_end(
     PlainHistoryCell {
         lines: vec![spans.into()],
     }
+}
+
+/// Render a list of discovered sub‑agents with names, descriptions, and optional tool allowlists.
+pub(crate) fn new_agents_list(agents: &[SubAgent]) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![vec!["• ".into(), "Agents".bold()].into()];
+    if agents.is_empty() {
+        lines.push(
+            "  └ none found (create ~/.codex/agents or ./.codex/agents)"
+                .dim()
+                .into(),
+        );
+        return PlainHistoryCell { lines };
+    }
+    let mut entries = agents
+        .iter()
+        .map(|a| (a.name.clone(), a.description.clone(), a.tools.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut body: Vec<Line<'static>> = Vec::new();
+    for (name, desc, tools) in entries {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(name.bold());
+        if !desc.trim().is_empty() {
+            spans.push(" — ".dim());
+            spans.push(desc.dim());
+        }
+        if let Some(list) = tools {
+            if !list.is_empty() {
+                spans.push("  ".into());
+                spans.push("tools:".dim());
+                spans.push(" ".into());
+                spans.extend(itertools::Itertools::intersperse(
+                    list.into_iter().map(Span::from),
+                    ", ".dim(),
+                ));
+            }
+        }
+        body.push(spans.into());
+    }
+    lines.extend(prefix_lines(body, "  └ ".into(), "    ".into()));
+    PlainHistoryCell { lines }
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
