@@ -35,6 +35,42 @@ Then simply run `codex` to get started:
 codex
 ```
 
+### Sub-agents quickstart
+
+Sub-agents are small, reusable agents you define in your project or home directory.
+
+1) Create an agent file in your repo:
+
+```
+./.codex/agents/docs.md
+```
+
+Contents:
+
+```
+---
+description: Project docs agent
+tools: ["shell"]
+---
+You are a concise technical writer.
+```
+
+2) Enable sub-agent tools (one-off):
+
+```
+codex -c include_subagent_tools=true
+```
+
+3) In the TUI, type:
+
+```
+/agents
+```
+
+You will see discovered agents listed. Ask Codex to use one, for example:
+
+"Use the docs agent to summarize README.md."
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 

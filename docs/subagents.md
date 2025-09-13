@@ -1,22 +1,22 @@
-# Sub‑Agents in Codex CLI
+# Sub-agents in Codex CLI
 
 This document explains the sub‑agent feature implemented in this fork: how agents are authored and discovered, how they are exposed to the model as tools, and how execution is performed and persisted. It also includes code pointers and examples to help you extend or debug the system.
 
 ## Overview
 
-- Sub‑agents are named, reusable “mini agents” with their own system prompt and an optional tool allowlist.
+- Sub-agents are named, reusable "mini agents" with their own system prompt and an optional tool allowlist.
 - They are defined as Markdown files with YAML frontmatter, discovered from user and project locations.
 - The main agent calls them through three function tools: `subagent_list`, `subagent_describe`, and `subagent_run`.
-- Runs execute in an isolated nested context with its own prompt and filtered tools; recursion is prevented by disabling sub‑agent tools inside sub‑agents.
+- Runs execute in an isolated nested context with its own prompt and filtered tools; recursion is prevented by disabling sub-agent tools inside sub-agents.
 - Start/end events are emitted and persisted for auditability and UI.
 
 Key modules:
-- `codex-rs/core/src/agents.rs` — loading/merging sub‑agents, nested runner, and execution result types.
+- `codex-rs/core/src/agents.rs` — loading/merging sub-agents, nested runner, and execution result types.
 - `codex-rs/core/src/openai_tools.rs` — tool definitions for `subagent_*` and shell mapping.
 - `codex-rs/core/src/codex.rs` — wiring sub‑agent tools into the main conversation loop and high‑level manager.
 - `codex-rs/protocol/src/protocol.rs` — SubAgentStart/End events and Origin tagging.
 
-## Authoring Agents
+## Authoring agents
 
 Create Markdown files with YAML frontmatter. The filename (without `.md`) is the canonical agent name; a different `name:` in the frontmatter is ignored with a warning.
 
@@ -67,7 +67,7 @@ pub fn parse_agent_markdown(content: &str, agent_name: String) -> Result<SubAgen
 }
 ```
 
-## Discovery and Precedence
+## Discovery and precedence
 
 Agents are loaded from both user and project scopes:
 - User: `~/.codex/agents/`
@@ -97,7 +97,7 @@ pub fn discover_and_load_agents(project_root: Option<&Path>) -> Result<AgentRegi
 }
 ```
 
-## Tool Allowlists and Aliases
+## Tool allowlists and aliases
 
 When an agent specifies `tools: [...]`, the available tool set for that agent is filtered:
 - Implementation: `filter_tools_for_agent(..)` in `agents.rs`.
@@ -132,7 +132,7 @@ pub(crate) fn filter_tools_for_agent(tools: &[OpenAiTool], allowed: Option<&[Str
 }
 ```
 
-## Exposed Tools (Function Tools)
+## Exposed tools (function tools)
 
 Three tools expose sub‑agent functionality to the model (defined in `openai_tools.rs`):
 
@@ -165,7 +165,7 @@ match name.as_str() {
 
 Feature flag: tools are injected only when `include_subagent_tools` is enabled (see Configuration below). Inside a running sub‑agent, the nested context sets `include_subagent_tools = false` to prevent recursion.
 
-## Execution Flow (NestedAgentRunner)
+## Execution flow (NestedAgentRunner)
 
 The `NestedAgentRunner` executes sub‑agents in an isolated flow:
 
@@ -185,7 +185,7 @@ The `NestedAgentRunner` executes sub‑agents in an isolated flow:
 
 Important details:
 - Local shell calls in Chat Completions payloads are mapped to a standard function tool call named `"shell"`. The generated request has `tool_calls[0].type == "function"` with `function.name == "shell"`.
-- Nested sub‑agents are explicitly blocked with a clear failure output: “Sub‑agents are not enabled in this nested context”.
+- Nested sub-agents are explicitly blocked with a clear failure output: "Sub-agents are not enabled in this nested context".
 
 ### Implementation snippets (manager + mapping)
 
@@ -240,9 +240,9 @@ let start_event = Event { id: sub_id.to_string(), msg: EventMsg::SubAgentStart(S
 let end_event   = Event { id: sub_id.to_string(), msg: EventMsg::SubAgentEnd(SubAgentEndEvent   { name: args.name.clone(), success }) };
 ```
 
-## Error Handling and Messages
+## Error handling and messages
 
-- Unknown agent: the manager returns a `FunctionCallOutput` with `success: false` and content containing “Sub‑agent execution failed: …”.
+- Unknown agent: the manager returns a `FunctionCallOutput` with `success: false` and content containing "Sub-agent execution failed: …".
 - Invalid tool arguments: the manager returns `failed to parse function arguments: …`.
 - Model start/stream errors: captured and included in `SubAgentResult.error`.
 
@@ -308,7 +308,30 @@ You are a concise writer. Answer in one short paragraph.
 
 2) Start Codex in that directory and ask it to “use the docs agent to summarize X”. The model may call `subagent_list`/`subagent_describe` to discover the agent and then `subagent_run` automatically. You can also craft a function call explicitly in advanced workflows.
 
-Note: Sub‑agent tools are available only when enabled via `include_subagent_tools` (config file, CLI override, or MCP parameter). The agent may still attempt to call the tools, but enabling the flag improves steerability and discoverability (the tools are advertised explicitly to the model).
+Note: Sub-agent tools are available only when enabled via `include_subagent_tools` (config file, CLI override, or MCP parameter). The agent may still attempt to call the tools, but enabling the flag improves steerability and discoverability (the tools are advertised explicitly to the model).
+
+## TUI usage
+
+- List discovered agents in the current repo and your home directory:
+  - Type `/agents` in the TUI.
+- Enable sub-agent tools for the session (so the model can call them):
+  - One-off: `codex -c include_subagent_tools=true`
+  - Persistent: add `include_subagent_tools = true` to `~/.codex/config.toml`.
+- Create a project agent for quick testing:
+
+```
+./.codex/agents/docs.md
+```
+
+Contents:
+
+```
+---
+description: Project docs agent for testing
+tools: ["shell"]
+---
+You are a concise technical writer.
+```
 
 ## Testing and Diagnostics
 
