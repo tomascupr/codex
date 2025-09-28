@@ -22,6 +22,13 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_last: bool,
 
+    /// Internal: resume the most recent recorded session scoped to the
+    /// current project (git repo root when available) or current working
+    /// directory. Set by the top-level `codex continue` wrapper; not exposed
+    /// as a public flag.
+    #[clap(skip)]
+    pub resume_local_last: bool,
+
     /// Internal: resume a specific recorded session by id (UUID). Set by the
     /// top-level `codex resume <SESSION_ID>` wrapper; not exposed as a public flag.
     #[clap(skip)]

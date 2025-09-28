@@ -85,6 +85,13 @@ enum Subcommand {
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
 
+    /// Continue the most recent session for the current repo or directory.
+    ///
+    /// This is equivalent to running `codex resume` scoped to the current
+    /// project and selecting the latest matching session without showing the
+    /// picker. If no local session is found, a fresh session starts.
+    Continue(ContinueCommand),
+
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
@@ -112,6 +119,12 @@ struct ResumeCommand {
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 
+    #[clap(flatten)]
+    config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct ContinueCommand {
     #[clap(flatten)]
     config_overrides: TuiCli,
 }
@@ -263,6 +276,23 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run(codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Continue(mut continue_cli)) => {
+            // Propagate any root-level config overrides (e.g. `-c key=value`).
+            prepend_config_flags(
+                &mut continue_cli.config_overrides.config_overrides,
+                root_config_overrides.clone(),
+            );
+
+            // Prepare the interactive CLI for a local-most-recent resume.
+            let mut interactive = continue_cli.config_overrides;
+            interactive.resume_picker = false;
+            interactive.resume_last = false;
+            interactive.resume_session_id = None;
+            interactive.resume_local_last = true;
+
+            let exit_info = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
+            print_exit_messages(exit_info);
         }
         Some(Subcommand::Resume(ResumeCommand {
             session_id,

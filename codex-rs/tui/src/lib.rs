@@ -365,6 +365,11 @@ async fn run_ratatui_app(
                 resume_picker::ResumeSelection::StartFresh
             }
         }
+    } else if cli.resume_local_last {
+        match find_local_latest_session(&config).await? {
+            Some(path) => resume_picker::ResumeSelection::Resume(path),
+            None => resume_picker::ResumeSelection::StartFresh,
+        }
     } else if cli.resume_last {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
             Ok(page) => page
@@ -408,6 +413,62 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
+}
+
+async fn find_local_latest_session(
+    config: &codex_core::config::Config,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    use codex_core::git_info::get_git_repo_root;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    let cwd = match config.cwd.canonicalize() {
+        Ok(p) => p,
+        Err(_) => config.cwd.clone(),
+    };
+
+    let repo_root = get_git_repo_root(&cwd);
+
+    // Helper: check if meta_cwd matches current project according to heuristics
+    fn is_local_match(meta_cwd: &Path, cwd: &Path, repo_root: &Option<PathBuf>) -> bool {
+        let meta = meta_cwd;
+        // Try canonicalize; if it fails, use as-is
+        let meta_can = meta.canonicalize().unwrap_or_else(|_| meta.to_path_buf());
+        let cwd_can = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+
+        if let Some(root) = repo_root {
+            let root_can = root.canonicalize().unwrap_or_else(|_| root.clone());
+            return meta_can.starts_with(&root_can) && cwd_can.starts_with(&root_can);
+        }
+        // Fallback: ancestor/descendant
+        meta_can.starts_with(&cwd_can) || cwd_can.starts_with(&meta_can)
+    }
+
+    // Iterate pages until we find a local match or run out
+    let mut cursor: Option<codex_core::Cursor> = None;
+    loop {
+        let page =
+            RolloutRecorder::list_conversations(&config.codex_home, 25, cursor.as_ref()).await?;
+        for item in &page.items {
+            // Extract SessionMeta.cwd from head records
+            let meta_cwd_opt = item.head.iter().find_map(|v| {
+                // Expect object: { meta: { cwd: "...", ... }, git: ... }
+                v.get("meta")
+                    .and_then(|m| m.get("cwd"))
+                    .and_then(|p| p.as_str())
+                    .map(PathBuf::from)
+            });
+            if let Some(meta_cwd) = meta_cwd_opt
+                && is_local_match(&meta_cwd, &cwd, &repo_root) {
+                    return Ok(Some(item.path.clone()));
+                }
+        }
+        if page.next_cursor.is_none() {
+            break;
+        }
+        cursor = page.next_cursor;
+    }
+    Ok(None)
 }
 
 #[expect(
