@@ -526,8 +526,9 @@ mod tests {
     /// the underlying `getpwuid()` call.
     #[test]
     fn shell_concurrent_get_user_shell_path() {
+        #[allow(clippy::needless_collect)]
         let threads: Vec<_> = (0..16)
-            .map(|_| std::thread::spawn(|| get_user_shell_path()))
+            .map(|_| std::thread::spawn(get_user_shell_path))
             .collect();
 
         let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
