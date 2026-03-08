@@ -89,7 +89,7 @@ impl PartialEq for Shell {
 impl Eq for Shell {}
 
 #[cfg(unix)]
-fn get_user_shell_path() -> Option<PathBuf> {
+fn get_user_shell_path_uncached() -> Option<PathBuf> {
     use libc::getpwuid;
     use libc::getuid;
     use std::ffi::CStr;
@@ -110,8 +110,17 @@ fn get_user_shell_path() -> Option<PathBuf> {
 }
 
 #[cfg(not(unix))]
-fn get_user_shell_path() -> Option<PathBuf> {
+fn get_user_shell_path_uncached() -> Option<PathBuf> {
     None
+}
+
+/// Returns the current user's shell path, cached for the lifetime of the
+/// process.  Caching through `OnceLock` ensures the underlying (non-thread-safe
+/// on musl) `getpwuid()` call is executed exactly once, avoiding a race
+/// condition that can segfault on static musl builds.
+fn get_user_shell_path() -> Option<PathBuf> {
+    static CACHED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CACHED.get_or_init(get_user_shell_path_uncached).clone()
 }
 
 fn file_exists(path: &PathBuf) -> Option<PathBuf> {
@@ -509,5 +518,23 @@ mod tests {
         let shell_path = powershell_shell.shell_path;
 
         assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
+    }
+
+    /// Verify that concurrent calls to `get_user_shell_path` (and by extension
+    /// `default_user_shell`) do not panic or return inconsistent results.
+    /// Before the `OnceLock` fix this could segfault on musl due to a race in
+    /// the underlying `getpwuid()` call.
+    #[test]
+    fn shell_concurrent_get_user_shell_path() {
+        let threads: Vec<_> = (0..16)
+            .map(|_| std::thread::spawn(|| get_user_shell_path()))
+            .collect();
+
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        // All threads must observe the same cached value.
+        for r in &results {
+            assert_eq!(r, &results[0]);
+        }
     }
 }
