@@ -523,7 +523,7 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
             let unit = unit.as_str().to_ascii_lowercase();
 
             if unit == "s" || unit.starts_with("second") {
-                return Some(Duration::from_secs_f64(value));
+                return Duration::try_from_secs_f64(value).ok();
             } else if unit == "ms" {
                 return Some(Duration::from_millis(value as u64));
             }
@@ -1395,6 +1395,20 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs(35)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_rejects_oversized_seconds() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit exceeded. Try again in 99999999999999999999s.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_at: None,
+        };
+
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, None);
     }
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
